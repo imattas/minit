@@ -5,6 +5,8 @@ use minit_core::manager::{ServiceManager, ServiceManagerError, StartPlan};
 use std::time::Duration;
 use thiserror::Error;
 
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(25);
+
 pub trait ProcessSpawner {
     fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError>;
 }
@@ -153,14 +155,17 @@ where
     F: CgroupFs,
     S: ProcessSignaler,
 {
+    let stop_timeout = services.stop_timeout(unit)?;
     for pid in cgroups.unit_pids(cgroup_fs, unit)? {
         signaler.terminate(pid)?;
     }
 
-    if !wait_until_cgroup_empty_for(cgroups, cgroup_fs, unit, 20)? {
+    if !wait_until_cgroup_empty_for_duration(cgroups, cgroup_fs, unit, stop_timeout)? {
         cgroups.kill_unit(cgroup_fs, unit)?;
         eprintln!("minitd: escalated {unit} to cgroup.kill");
-        wait_until_cgroup_empty(cgroups, cgroup_fs, unit)?;
+        wait_until_cgroup_empty_for_duration(cgroups, cgroup_fs, unit, stop_timeout)?
+            .then_some(())
+            .ok_or_else(|| RuntimeError::CgroupStillPopulated(unit.to_string()))?;
     }
 
     cgroups.remove_unit(cgroup_fs, unit)?;
@@ -176,30 +181,37 @@ fn wait_until_cgroup_empty<F>(
 where
     F: CgroupFs,
 {
-    if wait_until_cgroup_empty_for(cgroups, cgroup_fs, unit, 20)? {
+    if wait_until_cgroup_empty_for_duration(cgroups, cgroup_fs, unit, Duration::from_millis(500))? {
         return Ok(());
     }
     Err(RuntimeError::CgroupStillPopulated(unit.to_string()))
 }
 
-fn wait_until_cgroup_empty_for<F>(
+fn wait_until_cgroup_empty_for_duration<F>(
     cgroups: &CgroupManager,
     cgroup_fs: &mut F,
     unit: &str,
-    attempts: usize,
+    timeout: Duration,
 ) -> Result<bool, RuntimeError>
 where
     F: CgroupFs,
 {
+    let attempts = stop_poll_attempts(timeout);
     for attempt in 0..attempts {
         if cgroups.unit_is_empty(cgroup_fs, unit)? {
             return Ok(true);
         }
         if attempt + 1 < attempts {
-            std::thread::sleep(Duration::from_millis(25));
+            std::thread::sleep(STOP_POLL_INTERVAL);
         }
     }
     Ok(false)
+}
+
+fn stop_poll_attempts(timeout: Duration) -> usize {
+    let interval_ms = STOP_POLL_INTERVAL.as_millis();
+    let timeout_ms = timeout.as_millis();
+    timeout_ms.div_ceil(interval_ms).max(1) as usize
 }
 
 pub struct ServiceRuntime<F, P, R = NoopReaper, S = ThreadRestartSleeper> {
@@ -678,5 +690,13 @@ backoff = "fixed"
         let status = services.status(Some("crashy.service")).unwrap();
         assert_eq!(status[0].state, UnitState::Active);
         assert_eq!(status[0].main_pid, Some(654));
+    }
+
+    #[test]
+    fn stop_poll_attempts_are_derived_from_timeout() {
+        assert_eq!(stop_poll_attempts(Duration::from_millis(1)), 1);
+        assert_eq!(stop_poll_attempts(Duration::from_millis(25)), 1);
+        assert_eq!(stop_poll_attempts(Duration::from_millis(26)), 2);
+        assert_eq!(stop_poll_attempts(Duration::from_millis(500)), 20);
     }
 }

@@ -146,6 +146,10 @@ impl ServiceManager {
         Ok(())
     }
 
+    pub fn stop_timeout(&self, unit: &str) -> Result<Duration, ServiceManagerError> {
+        Ok(self.record(unit)?.definition.exec.stop_timeout_duration())
+    }
+
     pub fn record_exit(
         &mut self,
         pid: u32,
@@ -398,6 +402,28 @@ limit = "2/min"
         assert_eq!(
             statuses[0].cgroup_path.as_deref(),
             Some("/sys/fs/cgroup/minit/crashy")
+        );
+    }
+
+    #[test]
+    fn stop_timeout_comes_from_unit_definition() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "slow-stop"
+
+[exec]
+start = ["/bin/sleep", "100"]
+stop_timeout = "2s"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+
+        assert_eq!(
+            manager.stop_timeout("slow-stop").unwrap(),
+            Duration::from_secs(2)
         );
     }
 

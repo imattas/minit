@@ -64,6 +64,16 @@ pub struct ExecSection {
     pub stop: Vec<String>,
     #[serde(default)]
     pub working_directory: Option<String>,
+    pub stop_timeout: Option<String>,
+}
+
+impl ExecSection {
+    pub fn stop_timeout_duration(&self) -> Duration {
+        self.stop_timeout
+            .as_deref()
+            .and_then(parse_duration)
+            .unwrap_or(Duration::from_millis(500))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -234,6 +244,7 @@ start = ["/usr/bin/sshd", "-D"]
 reload = ["/bin/kill", "-HUP", "$MAINPID"]
 stop = ["/bin/kill", "TERM", "$MAINPID"]
 working_directory = "/"
+stop_timeout = "750ms"
 
 [dependencies]
 after = ["network-online.target"]
@@ -265,6 +276,10 @@ environment = ["RUST_LOG=info"]
         assert_eq!(unit.unit.name, "sshd");
         assert_eq!(unit.unit.kind, "service");
         assert_eq!(unit.exec.start, vec!["/usr/bin/sshd", "-D"]);
+        assert_eq!(
+            unit.exec.stop_timeout_duration(),
+            Duration::from_millis(750)
+        );
         assert_eq!(unit.dependencies.after, vec!["network-online.target"]);
         assert_eq!(unit.restart.policy.as_deref(), Some("on-failure"));
         assert_eq!(unit.restart.policy(), RestartPolicy::OnFailure);
