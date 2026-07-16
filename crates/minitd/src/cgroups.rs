@@ -1,0 +1,180 @@
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+pub const DEFAULT_CGROUP_ROOT: &str = "/sys/fs/cgroup/minit";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitCgroup {
+    pub unit: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum CgroupError {
+    #[error("unit name {0:?} is not safe for a cgroup path")]
+    UnsafeUnitName(String),
+    #[error("cgroup filesystem operation failed: {0}")]
+    Fs(String),
+}
+
+pub trait CgroupFs {
+    fn create_dir_all(&mut self, path: &Path) -> Result<(), CgroupError>;
+    fn write(&mut self, path: &Path, value: &str) -> Result<(), CgroupError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct CgroupManager {
+    root: PathBuf,
+}
+
+impl CgroupManager {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn ensure_root<F: CgroupFs>(&self, fs: &mut F) -> Result<(), CgroupError> {
+        fs.create_dir_all(&self.root)
+    }
+
+    pub fn create_unit<F: CgroupFs>(
+        &self,
+        fs: &mut F,
+        unit: &str,
+    ) -> Result<UnitCgroup, CgroupError> {
+        let path = self.unit_path(unit)?;
+        fs.create_dir_all(&path)?;
+        Ok(UnitCgroup {
+            unit: unit.to_string(),
+            path,
+        })
+    }
+
+    pub fn attach_pid<F: CgroupFs>(
+        &self,
+        fs: &mut F,
+        unit: &str,
+        pid: u32,
+    ) -> Result<(), CgroupError> {
+        let path = self.unit_path(unit)?.join("cgroup.procs");
+        fs.write(&path, &format!("{pid}\n"))
+    }
+
+    pub fn kill_unit<F: CgroupFs>(&self, fs: &mut F, unit: &str) -> Result<(), CgroupError> {
+        let path = self.unit_path(unit)?.join("cgroup.kill");
+        fs.write(&path, "1\n")
+    }
+
+    fn unit_path(&self, unit: &str) -> Result<PathBuf, CgroupError> {
+        if !is_safe_unit_name(unit) {
+            return Err(CgroupError::UnsafeUnitName(unit.to_string()));
+        }
+        Ok(self.root.join(unit))
+    }
+}
+
+pub struct LinuxCgroupFs;
+
+impl CgroupFs for LinuxCgroupFs {
+    fn create_dir_all(&mut self, path: &Path) -> Result<(), CgroupError> {
+        std::fs::create_dir_all(path).map_err(|err| CgroupError::Fs(err.to_string()))
+    }
+
+    fn write(&mut self, path: &Path, value: &str) -> Result<(), CgroupError> {
+        std::fs::write(path, value).map_err(|err| CgroupError::Fs(err.to_string()))
+    }
+}
+
+fn is_safe_unit_name(unit: &str) -> bool {
+    !unit.is_empty()
+        && unit
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[derive(Default)]
+    struct FakeCgroupFs {
+        dirs: BTreeSet<PathBuf>,
+        writes: BTreeMap<PathBuf, String>,
+    }
+
+    impl CgroupFs for FakeCgroupFs {
+        fn create_dir_all(&mut self, path: &Path) -> Result<(), CgroupError> {
+            self.dirs.insert(path.to_path_buf());
+            Ok(())
+        }
+
+        fn write(&mut self, path: &Path, value: &str) -> Result<(), CgroupError> {
+            self.writes.insert(path.to_path_buf(), value.to_string());
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ensure_root_creates_configured_root() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+
+        manager.ensure_root(&mut fs).unwrap();
+
+        assert!(fs.dirs.contains(Path::new("/sys/fs/cgroup/minit")));
+    }
+
+    #[test]
+    fn create_unit_creates_per_unit_cgroup() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+
+        let cgroup = manager.create_unit(&mut fs, "sshd.service").unwrap();
+
+        assert_eq!(cgroup.unit, "sshd.service");
+        assert_eq!(
+            cgroup.path,
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service")
+        );
+        assert!(fs
+            .dirs
+            .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
+    }
+
+    #[test]
+    fn attach_pid_writes_to_cgroup_procs() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+
+        manager.attach_pid(&mut fs, "sshd.service", 123).unwrap();
+
+        assert_eq!(
+            fs.writes
+                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.procs")),
+            Some(&"123\n".to_string())
+        );
+    }
+
+    #[test]
+    fn kill_unit_writes_to_cgroup_kill() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+
+        manager.kill_unit(&mut fs, "sshd.service").unwrap();
+
+        assert_eq!(
+            fs.writes
+                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")),
+            Some(&"1\n".to_string())
+        );
+    }
+
+    #[test]
+    fn unsafe_unit_names_are_rejected() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+
+        let error = manager.unit_path("../escape").unwrap_err();
+
+        assert_eq!(error, CgroupError::UnsafeUnitName("../escape".to_string()));
+    }
+}

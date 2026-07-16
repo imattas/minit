@@ -1,3 +1,4 @@
+pub mod cgroups;
 pub mod control;
 pub mod early_mounts;
 pub mod reaper;
