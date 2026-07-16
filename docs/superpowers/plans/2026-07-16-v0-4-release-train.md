@@ -110,11 +110,13 @@
 - Produces disposable Debian and Arch rootfs gates when local rootfs inputs are available.
 - Does not make release gate depend on large downloads unless explicitly provided.
 
-- [ ] Add scripts that validate required inputs and fail clearly when missing.
-- [ ] Reuse existing profile initramfs layout where possible.
-- [ ] Add smoke commands for status, list, and shutdown.
-- [ ] Document exact input requirements and unsupported distro services.
-- [ ] Run available local distro gates, then commit and push.
+- [x] Add scripts that validate required inputs and fail clearly when missing.
+- [x] Reuse existing profile initramfs layout where possible.
+- [x] Add smoke commands for status, list, and shutdown.
+- [x] Document exact input requirements and unsupported distro services.
+- [x] Run available local distro gates, then commit and push.
+
+Verification note: Alpine minirootfs gate was available and passed. Debian and Arch live rootfs gates require local `-RootfsTar` or `-RootfsDir` inputs; none were present on this workstation during Task 5.
 
 ### Task 6: Recovery Mode Hardening
 

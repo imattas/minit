@@ -33,6 +33,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-alpine-minir
   -Kernel C:\minit-vm\bzImage
 ```
 
+When local Debian or Arch rootfs inputs are available, run the optional distro-rootfs gates too:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-debian-minirootfs.ps1 `
+  -Kernel C:\minit-vm\bzImage `
+  -RootfsTar C:\minit-vm\debian-rootfs.tar
+
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-arch-rootfs.ps1 `
+  -Kernel C:\minit-vm\bzImage `
+  -RootfsTar C:\minit-vm\arch-rootfs.tar.zst
+```
+
+The Debian and Arch gates intentionally require local rootfs tarballs or extracted root directories. They verify normal-mode boot, `minitctl status`, `minitctl list`, and clean shutdown for the selected profile; they do not start real distro daemons or prove install readiness.
+
 ## Release Artifact Integrity
 
 Tag builds produce checksums and GitHub artifact attestations. Maintainers can also create local GPG detached signatures:
@@ -62,4 +76,5 @@ Rollback path:
 - Recent logs are a bounded in-memory lifecycle buffer, not persistent stdout/stderr capture.
 - `minitctl boot-timeline` reports current boot milestones, not per-unit startup duration analysis.
 - Security options fail closed unless explicitly implemented.
-- Broader distro install validation is still limited to the included VM profile and smokes.
+- Broader distro install validation is still limited to disposable VM profiles and smokes.
+- Debian and Arch validation is optional unless release notes explicitly name the local rootfs input that was tested.

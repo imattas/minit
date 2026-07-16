@@ -29,9 +29,20 @@ param(
     [string]$ExpectLongRunningUnit,
     [string]$ExpectHardeningUnit,
     [string]$ExpectSeccompUnit,
+    [switch]$ExpectCleanShutdown,
     [string]$AppendExtra,
     [switch]$Help
 )
+
+function Test-CleanShutdown {
+    param([string]$Output)
+
+    if (-not $ExpectCleanShutdown) {
+        return $true
+    }
+
+    return $Output.Contains("minitd: shutdown timeline: filesystems synced") -and $Output.Contains("reboot: Power down")
+}
 
 $append = "console=ttyS0 init=/init minit.rescue=1"
 if ($NormalMode) {
@@ -120,7 +131,7 @@ if ($AppendExtra) {
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectParallelTarget <target>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-ExpectSeccompUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectParallelTarget <target>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-ExpectSeccompUnit <unit>] [-ExpectCleanShutdown] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -303,13 +314,13 @@ try {
                 }
             }
             if ($ExpectStatusUnit) {
-                if ($output.Contains("unit: $ExpectStatusUnit")) {
+                if ($output.Contains("unit: $ExpectStatusUnit") -and (Test-CleanShutdown $output)) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
                     exit 0
                 }
             }
             if ($ExpectListUnit) {
-                if ($output.Contains("$ExpectListUnit")) {
+                if ($output.Contains("$ExpectListUnit") -and (Test-CleanShutdown $output)) {
                     Write-Output "Detected minitctl list entry for $ExpectListUnit; VM list smoke passed."
                     exit 0
                 }
@@ -514,7 +525,7 @@ try {
         exit 5
     }
     if ($ExpectStatusUnit) {
-        if ($output.Contains("unit: $ExpectStatusUnit")) {
+        if ($output.Contains("unit: $ExpectStatusUnit") -and (Test-CleanShutdown $output)) {
             Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
             exit 0
         }
@@ -522,7 +533,7 @@ try {
         exit 5
     }
     if ($ExpectListUnit) {
-        if ($output.Contains("$ExpectListUnit")) {
+        if ($output.Contains("$ExpectListUnit") -and (Test-CleanShutdown $output)) {
             Write-Output "Detected minitctl list entry for $ExpectListUnit; VM list smoke passed."
             exit 0
         }

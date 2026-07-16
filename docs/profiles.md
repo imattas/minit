@@ -22,6 +22,40 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-alpine-minir
 
 The verifier downloads and SHA256-checks Alpine's minirootfs, builds a `minit` initramfs from that root filesystem, and boots `alpine-smoke.target` in QEMU.
 
+### Debian Minirootfs
+
+`tools/vm/verify-debian-minirootfs.ps1` validates a local Debian root filesystem input without downloading one. Pass exactly one of:
+
+- `-RootfsTar <path>` for a local Debian rootfs tarball such as one produced by `debootstrap --make-tarball` or another trusted build pipeline.
+- `-RootfsDir <path>` for an already extracted Debian root filesystem directory.
+
+Run it with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-debian-minirootfs.ps1 `
+  -Kernel C:\minit-vm\bzImage `
+  -RootfsTar C:\minit-vm\debian-rootfs.tar
+```
+
+The verifier builds `minitd` and `minitctl` for `x86_64-unknown-linux-musl`, injects them plus the selected profile into the disposable rootfs initramfs, then boots QEMU status, list, and clean-shutdown smokes. By default it uses `config/profiles/minimal-distro` and checks `sshd.service` is visible to `minitctl`; it does not start distro services or claim the rootfs is install-ready.
+
+### Arch Rootfs
+
+`tools/vm/verify-arch-rootfs.ps1` validates a local Arch root filesystem input without downloading one. Pass exactly one of:
+
+- `-RootfsTar <path>` for a local Arch rootfs tarball. The WSL `tar` used by the script must support the tarball compression format.
+- `-RootfsDir <path>` for an already extracted Arch root filesystem directory.
+
+Run it with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-arch-rootfs.ps1 `
+  -Kernel C:\minit-vm\bzImage `
+  -RootfsTar C:\minit-vm\arch-rootfs.tar.zst
+```
+
+The Arch verifier uses the same smoke sequence as the Debian verifier: status, list, and clean shutdown against the selected profile. It is a disposable rootfs compatibility gate, not an installer or package manager integration test.
+
 ### Minimal Distro Template
 
 `config/profiles/minimal-distro` is a distro-style template for a root filesystem that already has the referenced binaries and configuration files.
@@ -61,6 +95,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\build-profile-initr
 - The profile is intended for disposable VM validation before any host use.
 - There is no device manager, journal replacement, user session manager, or service-file converter in this profile.
 - Unsupported security settings fail closed at unit parse or start time instead of being ignored.
+- Debian and Arch rootfs verifiers require local rootfs inputs; the release gate does not download or depend on large distro images.
+- Debian and Arch rootfs verifiers currently prove `minitd` normal-mode boot, `minitctl status`, `minitctl list`, and clean VM shutdown only. Starting real distro services remains a later profile-specific gate.
 
 ## Recovery Rule
 

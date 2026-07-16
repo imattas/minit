@@ -691,13 +691,14 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/sleep 1; /bin/minitctl --socket {socket_path} status {unit}; if [ -e /run/minit/seccomp-deny-write.proof ]; then echo seccomp-write-created; else echo seccomp-write-denied; fi"
                 ),
             ]);
-        } else if let Some(unit) = &config.smoke_list_unit {
+        } else if config.smoke_list_unit.is_some() {
             socket.max_requests = Some(1);
             let socket_path = socket.socket_path.display();
             socket.startup_command = Some(vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                format!("/bin/minitctl --socket {socket_path} list | /bin/busybox grep {unit}"),
+                "/bin/minitctl".to_string(),
+                "--socket".to_string(),
+                socket_path.to_string(),
+                "list".to_string(),
             ]);
         } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
