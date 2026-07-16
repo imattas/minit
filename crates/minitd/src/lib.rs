@@ -16,6 +16,7 @@ pub struct NormalConfig {
     pub unit_dir: PathBuf,
     pub socket: control::ControlSocketConfig,
     pub smoke_status_unit: Option<String>,
+    pub smoke_start_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -24,6 +25,7 @@ impl Default for NormalConfig {
             unit_dir: PathBuf::from(DEFAULT_UNIT_DIR),
             socket: control::ControlSocketConfig::default(),
             smoke_status_unit: None,
+            smoke_start_unit: None,
         }
     }
 }
@@ -182,6 +184,8 @@ pub fn normal_config_from_kernel_cmdline(
             );
         } else if let Some(value) = arg.strip_prefix("minit.smoke_status=") {
             config.smoke_status_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_start=") {
+            config.smoke_start_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -204,6 +208,9 @@ where
     }
     if arg_config.smoke_status_unit.is_some() {
         config.smoke_status_unit = arg_config.smoke_status_unit;
+    }
+    if arg_config.smoke_start_unit.is_some() {
+        config.smoke_start_unit = arg_config.smoke_start_unit;
     }
     Ok(config)
 }
@@ -262,6 +269,11 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
     {
         use crate::shutdown::ShutdownExecutor;
 
+        if let Err(error) = prepare_normal_filesystems() {
+            eprintln!("minitd: failed to prepare normal-mode filesystems: {error}");
+            return 1;
+        }
+
         let services = if config.unit_dir.exists() {
             match units::load_units_from_dir(&config.unit_dir) {
                 Ok(services) => services,
@@ -274,7 +286,17 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
             minit_core::manager::ServiceManager::new()
         };
         let mut socket = config.socket.clone();
-        if let Some(unit) = &config.smoke_status_unit {
+        if let Some(unit) = &config.smoke_start_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
+        } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
             socket.startup_command = Some(vec![
                 "/bin/minitctl".to_string(),
@@ -292,7 +314,9 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
         let mut service = control::ControlService::with_runtime(services, runtime);
         match control::run_control_socket(&socket, &mut service) {
             Ok(()) => {
-                if config.smoke_status_unit.is_some() && std::process::id() == 1 {
+                if (config.smoke_status_unit.is_some() || config.smoke_start_unit.is_some())
+                    && std::process::id() == 1
+                {
                     let mut shutdown = shutdown::LinuxShutdownExecutor;
                     let _ = shutdown.sync_filesystems();
                     let _ = shutdown.reboot(shutdown::ShutdownAction::Poweroff);
@@ -310,6 +334,32 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
     {
         let _ = config;
         0
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_normal_filesystems() -> Result<(), String> {
+    mount_fs("proc", "/proc", "proc")?;
+    mount_fs("sysfs", "/sys", "sysfs")?;
+    mount_fs("devtmpfs", "/dev", "devtmpfs")?;
+    mount_fs("tmpfs", "/run", "tmpfs")?;
+    mount_fs("cgroup2", "/sys/fs/cgroup", "cgroup2")?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn mount_fs(source: &str, target: &str, fstype: &str) -> Result<(), String> {
+    std::fs::create_dir_all(target).map_err(|err| err.to_string())?;
+    match nix::mount::mount(
+        Some(source),
+        target,
+        Some(fstype),
+        nix::mount::MsFlags::empty(),
+        None::<&str>,
+    ) {
+        Ok(()) => Ok(()),
+        Err(nix::errno::Errno::EBUSY) => Ok(()),
+        Err(error) => Err(format!("failed to mount {target}: {error}")),
     }
 }
 
@@ -428,6 +478,7 @@ mod tests {
         );
         assert_eq!(config.socket.max_requests, Some(1));
         assert_eq!(config.smoke_status_unit.as_deref(), None);
+        assert_eq!(config.smoke_start_unit.as_deref(), None);
     }
 
     #[test]
@@ -438,5 +489,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.smoke_status_unit.as_deref(), Some("sshd"));
+    }
+
+    #[test]
+    fn normal_config_parses_smoke_start_unit() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_start=demo-sleep",
+        )
+        .unwrap();
+
+        assert_eq!(config.smoke_start_unit.as_deref(), Some("demo-sleep"));
     }
 }

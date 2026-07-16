@@ -1,0 +1,16 @@
+[unit]
+name = "demo-sleep"
+description = "VM smoke sleep service"
+kind = "service"
+
+[exec]
+start = ["/bin/sleep", "60"]
+working_directory = "/"
+
+[restart]
+policy = "never"
+
+[security]
+user = "root"
+group = "root"
+no_new_privileges = true

@@ -75,6 +75,7 @@ cd "`$root"
 chmod +x init bin/busybox
 if [ -f bin/minitctl ]; then chmod +x bin/minitctl; fi
 ln -sf busybox bin/sh
+ln -sf busybox bin/sleep
 ln -sf ../bin/busybox sbin/getty
 find . -print0 | cpio --null -o -H newc > "`$output"
 "@

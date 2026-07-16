@@ -228,6 +228,6 @@ environment = ["RUST_LOG=info"]
             parsed += 1;
         }
 
-        assert_eq!(parsed, 3);
+        assert_eq!(parsed, 4);
     }
 }
