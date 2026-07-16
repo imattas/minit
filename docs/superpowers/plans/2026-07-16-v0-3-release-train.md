@@ -83,9 +83,9 @@
 - Keeps `ControlResponse::Explanation { unit, lines }`.
 - Adds lines for state, failed dependencies, last exit, restart attempts, and cgroup path where available.
 
-- [ ] Add failing tests for explain output on failed optional and required units.
-- [ ] Extend manager explain summaries from existing status and dependency data.
-- [ ] Keep output line-oriented for current CLI compatibility.
+- [x] Add failing tests for explain output on failed optional and required units.
+- [x] Extend manager explain summaries from existing status and dependency data.
+- [x] Keep output line-oriented for current CLI compatibility.
 
 ### Task 5: Recent Logs Command
 

@@ -213,18 +213,36 @@ impl ServiceManager {
         let mut lines = vec![
             format!("kind: {}", record.definition.unit.kind),
             format!("state: {:?}", record.state).to_lowercase(),
+            format!("restart_attempts: {}", record.restart_attempts),
         ];
+        if let Some(main_pid) = record.main_pid {
+            lines.push(format!("main_pid: {main_pid}"));
+        }
+        if let Some(last_exit_status) = &record.last_exit_status {
+            lines.push(format!("last_exit_status: {last_exit_status}"));
+        }
+        if let Some(cgroup_path) = &record.cgroup_path {
+            lines.push(format!("cgroup_path: {cgroup_path}"));
+        }
         if !record.definition.dependencies.requires.is_empty() {
             lines.push(format!(
                 "requires: {}",
                 record.definition.dependencies.requires.join(", ")
             ));
+            let failed = self.failed_dependencies(&record.definition.dependencies.requires)?;
+            if !failed.is_empty() {
+                lines.push(format!("failed_requires: {}", failed.join(", ")));
+            }
         }
         if !record.definition.dependencies.wants.is_empty() {
             lines.push(format!(
                 "wants: {}",
                 record.definition.dependencies.wants.join(", ")
             ));
+            let failed = self.failed_dependencies(&record.definition.dependencies.wants)?;
+            if !failed.is_empty() {
+                lines.push(format!("failed_wants: {}", failed.join(", ")));
+            }
         }
         if !record.definition.dependencies.after.is_empty() {
             lines.push(format!(
@@ -239,6 +257,20 @@ impl ServiceManager {
             ));
         }
         Ok(lines)
+    }
+
+    fn failed_dependencies(
+        &self,
+        dependencies: &[String],
+    ) -> Result<Vec<String>, ServiceManagerError> {
+        let mut failed = Vec::new();
+        for dependency in dependencies {
+            let record = self.record(dependency)?;
+            if record.state == UnitState::Failed {
+                failed.push(dependency.clone());
+            }
+        }
+        Ok(failed)
     }
 
     pub fn plan_start(&mut self, unit: &str) -> Result<StartPlan, ServiceManagerError> {
@@ -585,6 +617,89 @@ limit = "2/min"
             statuses[0].cgroup_path.as_deref(),
             Some("/sys/fs/cgroup/minit/crashy")
         );
+    }
+
+    #[test]
+    fn explain_includes_runtime_context() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+        manager
+            .set_cgroup_path("crashy", "/sys/fs/cgroup/minit/crashy")
+            .unwrap();
+        manager.plan_start("crashy").unwrap();
+        manager.mark_active("crashy", 42).unwrap();
+        manager
+            .record_exit_with_status(42, false, "exit 1")
+            .unwrap()
+            .unwrap();
+
+        let lines = manager.explain("crashy").unwrap();
+
+        assert!(lines.contains(&"kind: service".to_string()));
+        assert!(lines.contains(&"state: starting".to_string()));
+        assert!(lines.contains(&"restart_attempts: 1".to_string()));
+        assert!(lines.contains(&"last_exit_status: exit 1".to_string()));
+        assert!(lines.contains(&"cgroup_path: /sys/fs/cgroup/minit/crashy".to_string()));
+    }
+
+    #[test]
+    fn explain_reports_failed_required_and_wanted_dependencies() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+requires = ["required.service"]
+wants = ["wanted.service"]
+"#,
+        )
+        .unwrap();
+        let required = parse_unit_toml(
+            r#"
+[unit]
+name = "required.service"
+
+[exec]
+start = ["/bin/required"]
+"#,
+        )
+        .unwrap();
+        let wanted = parse_unit_toml(
+            r#"
+[unit]
+name = "wanted.service"
+
+[exec]
+start = ["/bin/wanted"]
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(target).unwrap();
+        manager.add_unit(required).unwrap();
+        manager.add_unit(wanted).unwrap();
+        manager.mark_failed("required.service").unwrap();
+        manager.mark_failed("wanted.service").unwrap();
+
+        let lines = manager.explain("multi-user.target").unwrap();
+
+        assert!(lines.contains(&"failed_requires: required.service".to_string()));
+        assert!(lines.contains(&"failed_wants: wanted.service".to_string()));
     }
 
     #[test]

@@ -882,6 +882,7 @@ wants = ["sshd.service"]
                 lines: vec![
                     "kind: target".to_string(),
                     "state: inactive".to_string(),
+                    "restart_attempts: 0".to_string(),
                     "wants: sshd.service".to_string(),
                 ],
             }
