@@ -8,6 +8,8 @@ Normal mode will require Linux with cgroups v2. Rescue/initramfs mode is degrade
 
 This repository is not daily-driver-ready yet.
 
+Release notes and known limitations for the first experimental milestone are in [docs/releases/v0.1.0-experimental.md](docs/releases/v0.1.0-experimental.md).
+
 ## Release verification
 
 Run the source-only gate:
