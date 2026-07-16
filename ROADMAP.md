@@ -4,6 +4,8 @@
 
 This roadmap is intentionally strict. A phase is not complete until the code, tests, Linux builds, and VM evidence are in place.
 
+Status: the v0.1 through v1.0 candidate roadmap has been implemented and pushed. The current full release gate verifies formatting, unit tests, Linux `musl` builds, release packaging/checksums, initramfs generation, service lifecycle, restart policy, target boot, hardening, mount handling, events, long-running supervision, boot-loop behavior, stuck-process handling, and shutdown escalation.
+
 ## Current Baseline
 
 Completed:
@@ -17,6 +19,11 @@ Completed:
 - Start, stop, restart, cgroup cleanup, restart policy, and shutdown-stop VM smokes.
 - Release verification script: `tools/verify-release.ps1`.
 - GitHub CI for formatting, tests, and Linux `musl` builds.
+- Strict unit parsing, fail-closed unsupported security handling, UID/GID switching, clean environment handling, cgroup v2 resources, fuzz harnesses, and security review notes.
+- Mount and swap units with shutdown deactivation, optional mount failure behavior, and VM mount smokes.
+- Diagnostic event buffer, `minitctl events`, boot and shutdown timeline markers.
+- Release packaging script, checksums, install/rollback notes, and release template.
+- Long-running service smoke, repeated boot/shutdown loop verification, and daily-driver candidate notes.
 
 Current release gate:
 
@@ -266,12 +273,10 @@ Acceptance:
 
 ## Immediate Next Steps
 
-1. Cut `v0.1.0-experimental` only after the current full release gate passes from a clean checkout.
-2. Add release notes and known limitations for v0.1.
-3. Start v0.2 with graceful stop escalation and stuck-service VM proof.
-4. Add restart backoff and rate-window enforcement.
-5. Add status fields for last exit, restart count, and cgroup path.
-6. Keep every phase push gated by `tools\verify-release.ps1`.
+1. Keep every future change gated by `tools\verify-release.ps1`.
+2. Expand real distro validation beyond the included minimal VM profile.
+3. Add signed artifacts if a signing key and release process are available.
+4. Keep the rescue and rollback path documented for every release.
 
 ## Quality Bar
 
