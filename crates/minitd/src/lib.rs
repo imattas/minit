@@ -17,6 +17,8 @@ pub struct NormalConfig {
     pub socket: control::ControlSocketConfig,
     pub smoke_status_unit: Option<String>,
     pub smoke_start_unit: Option<String>,
+    pub smoke_stop_unit: Option<String>,
+    pub smoke_restart_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -26,6 +28,8 @@ impl Default for NormalConfig {
             socket: control::ControlSocketConfig::default(),
             smoke_status_unit: None,
             smoke_start_unit: None,
+            smoke_stop_unit: None,
+            smoke_restart_unit: None,
         }
     }
 }
@@ -186,6 +190,10 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_status_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_start=") {
             config.smoke_start_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_stop=") {
+            config.smoke_stop_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_restart=") {
+            config.smoke_restart_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -211,6 +219,12 @@ where
     }
     if arg_config.smoke_start_unit.is_some() {
         config.smoke_start_unit = arg_config.smoke_start_unit;
+    }
+    if arg_config.smoke_stop_unit.is_some() {
+        config.smoke_stop_unit = arg_config.smoke_stop_unit;
+    }
+    if arg_config.smoke_restart_unit.is_some() {
+        config.smoke_restart_unit = arg_config.smoke_restart_unit;
     }
     Ok(config)
 }
@@ -296,6 +310,26 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_stop_unit {
+            socket.max_requests = Some(3);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} stop {unit}; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
+        } else if let Some(unit) = &config.smoke_restart_unit {
+            socket.max_requests = Some(3);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} restart {unit}; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
             socket.startup_command = Some(vec![
@@ -314,7 +348,10 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
         let mut service = control::ControlService::with_runtime(services, runtime);
         match control::run_control_socket(&socket, &mut service) {
             Ok(()) => {
-                if (config.smoke_status_unit.is_some() || config.smoke_start_unit.is_some())
+                if (config.smoke_status_unit.is_some()
+                    || config.smoke_start_unit.is_some()
+                    || config.smoke_stop_unit.is_some()
+                    || config.smoke_restart_unit.is_some())
                     && std::process::id() == 1
                 {
                     let mut shutdown = shutdown::LinuxShutdownExecutor;
@@ -479,6 +516,8 @@ mod tests {
         assert_eq!(config.socket.max_requests, Some(1));
         assert_eq!(config.smoke_status_unit.as_deref(), None);
         assert_eq!(config.smoke_start_unit.as_deref(), None);
+        assert_eq!(config.smoke_stop_unit.as_deref(), None);
+        assert_eq!(config.smoke_restart_unit.as_deref(), None);
     }
 
     #[test]
@@ -499,5 +538,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.smoke_start_unit.as_deref(), Some("demo-sleep"));
+    }
+
+    #[test]
+    fn normal_config_parses_smoke_stop_and_restart_units() {
+        let stop = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_stop=demo-sleep",
+        )
+        .unwrap();
+        let restart = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_restart=demo-sleep",
+        )
+        .unwrap();
+
+        assert_eq!(stop.smoke_stop_unit.as_deref(), Some("demo-sleep"));
+        assert_eq!(restart.smoke_restart_unit.as_deref(), Some("demo-sleep"));
     }
 }

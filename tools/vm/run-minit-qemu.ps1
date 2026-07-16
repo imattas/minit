@@ -6,6 +6,8 @@ param(
     [switch]$AutoShutdownSmoke,
     [string]$ExpectStatusUnit,
     [string]$ExpectStartUnit,
+    [string]$ExpectStopUnit,
+    [string]$ExpectRestartUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -23,12 +25,18 @@ if ($ExpectStatusUnit) {
 if ($ExpectStartUnit) {
     $append = "$append minit.smoke_start=$ExpectStartUnit"
 }
+if ($ExpectStopUnit) {
+    $append = "$append minit.smoke_stop=$ExpectStopUnit"
+}
+if ($ExpectRestartUnit) {
+    $append = "$append minit.smoke_restart=$ExpectRestartUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -78,6 +86,18 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectStopUnit) {
+                if ($output.Contains("accepted: stopped $ExpectStopUnit") -and $output.Contains("unit: $ExpectStopUnit") -and $output.Contains("state: inactive")) {
+                    Write-Output "Detected minitctl stop and inactive status for $ExpectStopUnit; VM stop smoke passed."
+                    exit 0
+                }
+            }
+            if ($ExpectRestartUnit) {
+                if ($output.Contains("accepted: started $ExpectRestartUnit") -and $output.Contains("unit: $ExpectRestartUnit") -and $output.Contains("state: active")) {
+                    Write-Output "Detected minitctl restart and active status for $ExpectRestartUnit; VM restart smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -104,6 +124,22 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected minitctl start/status for $ExpectStartUnit was detected."
+        exit 5
+    }
+    if ($ExpectStopUnit) {
+        if ($output.Contains("accepted: stopped $ExpectStopUnit") -and $output.Contains("unit: $ExpectStopUnit") -and $output.Contains("state: inactive")) {
+            Write-Output "Detected minitctl stop and inactive status for $ExpectStopUnit; VM stop smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected minitctl stop/status for $ExpectStopUnit was detected."
+        exit 5
+    }
+    if ($ExpectRestartUnit) {
+        if ($output.Contains("accepted: started $ExpectRestartUnit") -and $output.Contains("unit: $ExpectRestartUnit") -and $output.Contains("state: active")) {
+            Write-Output "Detected minitctl restart and active status for $ExpectRestartUnit; VM restart smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected minitctl restart/status for $ExpectRestartUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {
