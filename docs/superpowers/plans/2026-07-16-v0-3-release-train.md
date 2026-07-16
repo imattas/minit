@@ -143,9 +143,9 @@
 - Keeps target start external behavior.
 - Produces deterministic batch ordering and bounded concurrent starts where runtime can safely support it.
 
-- [ ] Add failing tests proving independent units in one batch are submitted through a batch interface.
-- [ ] Add a conservative batch-start runtime hook with sequential default.
-- [ ] Only use actual thread concurrency if service state mutation remains safe and deterministic.
+- [x] Add failing tests proving independent units in one batch are submitted through a batch interface.
+- [x] Add a conservative batch-start runtime hook with sequential default.
+- [x] Only use actual thread concurrency if service state mutation remains safe and deterministic.
 
 ### Task 9: v0.3 Release
 

@@ -40,6 +40,17 @@ pub trait ControlRuntime {
     fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String>;
     fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String>;
 
+    fn start_batch(
+        &mut self,
+        services: &mut ServiceManager,
+        units: &[String],
+    ) -> Vec<(String, Result<String, String>)> {
+        units
+            .iter()
+            .map(|unit| (unit.clone(), self.start(services, unit)))
+            .collect()
+    }
+
     fn reap(&mut self, _services: &mut ServiceManager) -> Result<(), String> {
         Ok(())
     }
@@ -210,6 +221,7 @@ impl<R: ControlRuntime> ControlService<R> {
                 .map_err(|err| err.to_string())?;
             let mut failed_units = BTreeSet::new();
             for batch in batches {
+                let mut service_units = Vec::new();
                 for graph_unit in batch {
                     if let Some(failed_dependency) = first_failed_required_dependency(
                         &self.services,
@@ -243,19 +255,23 @@ impl<R: ControlRuntime> ControlService<R> {
                             .mark_active_without_pid(&graph_unit)
                             .map_err(|err| err.to_string())?;
                     } else {
-                        match self.runtime.start(&mut self.services, &graph_unit) {
-                            Ok(_) => {}
-                            Err(message) => {
-                                failed_units.insert(graph_unit.clone());
-                                if self
-                                    .services
-                                    .is_required_for_start(unit, &graph_unit)
-                                    .map_err(|err| err.to_string())?
-                                {
-                                    return Err(message);
-                                }
-                                eprintln!("minitd: optional unit {graph_unit} failed: {message}");
+                        service_units.push(graph_unit);
+                    }
+                }
+                if !service_units.is_empty() {
+                    for (graph_unit, result) in
+                        self.runtime.start_batch(&mut self.services, &service_units)
+                    {
+                        if let Err(message) = result {
+                            failed_units.insert(graph_unit.clone());
+                            if self
+                                .services
+                                .is_required_for_start(unit, &graph_unit)
+                                .map_err(|err| err.to_string())?
+                            {
+                                return Err(message);
                             }
+                            eprintln!("minitd: optional unit {graph_unit} failed: {message}");
                         }
                     }
                 }
@@ -566,6 +582,7 @@ start = ["/usr/bin/sshd", "-D"]
     #[derive(Default)]
     struct FakeRuntime {
         calls: Vec<String>,
+        batches: Vec<Vec<String>>,
         fail_starts: Vec<String>,
     }
 
@@ -580,6 +597,18 @@ start = ["/usr/bin/sshd", "-D"]
                 .mark_active(unit, 123)
                 .map_err(|err| err.to_string())?;
             Ok(format!("started {unit} as pid 123"))
+        }
+
+        fn start_batch(
+            &mut self,
+            services: &mut ServiceManager,
+            units: &[String],
+        ) -> Vec<(String, Result<String, String>)> {
+            self.batches.push(units.to_vec());
+            units
+                .iter()
+                .map(|unit| (unit.clone(), self.start(services, unit)))
+                .collect()
         }
 
         fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
@@ -766,6 +795,53 @@ wants = ["sshd.service"]
                     cgroup_path: None,
                 }]
             }
+        );
+    }
+
+    #[test]
+    fn control_service_start_target_submits_independent_units_as_batch() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+wants = ["network.service", "sshd.service"]
+"#,
+        )
+        .unwrap();
+        let network = parse_unit_toml(
+            r#"
+[unit]
+name = "network.service"
+
+[exec]
+start = ["/bin/network"]
+"#,
+        )
+        .unwrap();
+        let mut services = service_manager_with_sshd();
+        services.add_unit(target).unwrap();
+        services.add_unit(network).unwrap();
+        let mut service = ControlService::with_runtime(services, FakeRuntime::default());
+
+        let response = service.handle_request(ControlRequest::Start {
+            unit: "multi-user.target".to_string(),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Accepted {
+                message: "started target multi-user.target".to_string(),
+            }
+        );
+        assert_eq!(
+            service.runtime.batches,
+            vec![vec![
+                "network.service".to_string(),
+                "sshd.service".to_string()
+            ]]
         );
     }
 
