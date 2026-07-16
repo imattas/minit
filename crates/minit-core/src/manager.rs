@@ -25,6 +25,8 @@ pub struct ServiceRecord {
     pub state: UnitState,
     pub main_pid: Option<u32>,
     pub restart_attempts: u32,
+    pub last_exit_status: Option<String>,
+    pub cgroup_path: Option<String>,
     restart_events: VecDeque<Duration>,
 }
 
@@ -72,6 +74,8 @@ impl ServiceManager {
                 state: UnitState::Inactive,
                 main_pid: None,
                 restart_attempts: 0,
+                last_exit_status: None,
+                cgroup_path: None,
                 restart_events: VecDeque::new(),
             },
         );
@@ -132,18 +136,55 @@ impl ServiceManager {
         Ok(())
     }
 
+    pub fn set_cgroup_path(
+        &mut self,
+        unit: &str,
+        path: impl Into<String>,
+    ) -> Result<(), ServiceManagerError> {
+        let record = self.record_mut(unit)?;
+        record.cgroup_path = Some(path.into());
+        Ok(())
+    }
+
     pub fn record_exit(
         &mut self,
         pid: u32,
         successful: bool,
     ) -> Result<Option<RestartDecision>, ServiceManagerError> {
-        self.record_exit_at(pid, successful, self.clock_base.elapsed())
+        let status = match successful {
+            true => "exit 0",
+            false => "exit nonzero",
+        };
+        self.record_exit_with_status_at(pid, successful, status, self.clock_base.elapsed())
+    }
+
+    pub fn record_exit_with_status(
+        &mut self,
+        pid: u32,
+        successful: bool,
+        status: impl Into<String>,
+    ) -> Result<Option<RestartDecision>, ServiceManagerError> {
+        self.record_exit_with_status_at(pid, successful, status, self.clock_base.elapsed())
     }
 
     pub fn record_exit_at(
         &mut self,
         pid: u32,
         successful: bool,
+        now: Duration,
+    ) -> Result<Option<RestartDecision>, ServiceManagerError> {
+        let status = match successful {
+            true => "exit 0",
+            false => "exit nonzero",
+        };
+        self.record_exit_with_status_at(pid, successful, status, now)
+    }
+
+    pub fn record_exit_with_status_at(
+        &mut self,
+        pid: u32,
+        successful: bool,
+        status: impl Into<String>,
         now: Duration,
     ) -> Result<Option<RestartDecision>, ServiceManagerError> {
         let Some((unit, record)) = self
@@ -155,6 +196,7 @@ impl ServiceManager {
         };
 
         record.main_pid = None;
+        record.last_exit_status = Some(status.into());
         let should_restart = match record.definition.restart.policy() {
             RestartPolicy::Never => false,
             RestartPolicy::Always => true,
@@ -242,6 +284,9 @@ impl ServiceRecord {
                 true => None,
                 false => Some(self.definition.unit.description.clone()),
             },
+            restart_attempts: self.restart_attempts,
+            last_exit_status: self.last_exit_status.clone(),
+            cgroup_path: self.cgroup_path.clone(),
         }
     }
 }
@@ -316,6 +361,44 @@ start = ["/usr/bin/sshd", "-D"]
 
         assert_eq!(statuses[0].state, UnitState::Active);
         assert_eq!(statuses[0].main_pid, Some(123));
+    }
+
+    #[test]
+    fn status_includes_restart_attempts_last_exit_and_cgroup_path() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+limit = "2/min"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+        manager
+            .set_cgroup_path("crashy", "/sys/fs/cgroup/minit/crashy")
+            .unwrap();
+        manager.plan_start("crashy").unwrap();
+        manager.mark_active("crashy", 42).unwrap();
+
+        manager
+            .record_exit_with_status(42, false, "exit 1")
+            .unwrap()
+            .unwrap();
+        let statuses = manager.status(Some("crashy")).unwrap();
+
+        assert_eq!(statuses[0].restart_attempts, 1);
+        assert_eq!(statuses[0].last_exit_status.as_deref(), Some("exit 1"));
+        assert_eq!(
+            statuses[0].cgroup_path.as_deref(),
+            Some("/sys/fs/cgroup/minit/crashy")
+        );
     }
 
     #[test]

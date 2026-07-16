@@ -51,6 +51,10 @@ impl CgroupManager {
         })
     }
 
+    pub fn cgroup_path(&self, unit: &str) -> Result<PathBuf, CgroupError> {
+        self.unit_path(unit)
+    }
+
     pub fn attach_pid<F: CgroupFs>(
         &self,
         fs: &mut F,

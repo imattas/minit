@@ -29,6 +29,9 @@ pub struct UnitStatus {
     pub state: UnitState,
     pub main_pid: Option<u32>,
     pub description: Option<String>,
+    pub restart_attempts: u32,
+    pub last_exit_status: Option<String>,
+    pub cgroup_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +110,9 @@ mod tests {
                 state: UnitState::Active,
                 main_pid: Some(42),
                 description: Some("OpenSSH daemon".to_string()),
+                restart_attempts: 0,
+                last_exit_status: None,
+                cgroup_path: None,
             }],
         };
 

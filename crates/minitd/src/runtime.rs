@@ -124,6 +124,7 @@ where
         return Err(error.into());
     }
 
+    services.set_cgroup_path(unit, cgroups.cgroup_path(unit)?.display().to_string())?;
     services.mark_active(unit, pid)?;
     Ok(pid)
 }
@@ -280,7 +281,11 @@ where
         for event in events {
             let successful = matches!(event.status, ReapStatus::Exited(0));
             let Some(decision) = services
-                .record_exit(event.pid as u32, successful)
+                .record_exit_with_status(
+                    event.pid as u32,
+                    successful,
+                    render_reap_status(&event.status),
+                )
                 .map_err(|err| err.to_string())?
             else {
                 continue;
@@ -320,6 +325,14 @@ where
             eprintln!("minitd: stopped {unit} for shutdown");
         }
         Ok(())
+    }
+}
+
+fn render_reap_status(status: &ReapStatus) -> String {
+    match status {
+        ReapStatus::Exited(code) => format!("exit {code}"),
+        ReapStatus::Signaled(signal) => format!("signal {signal}"),
+        ReapStatus::StillAlive => "still alive".to_string(),
     }
 }
 

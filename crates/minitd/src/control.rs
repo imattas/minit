@@ -329,6 +329,9 @@ start = ["/usr/bin/sshd", "-D"]
                     state: UnitState::Inactive,
                     main_pid: None,
                     description: Some("OpenSSH daemon".to_string()),
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
                 }]
             }
         );
@@ -399,6 +402,9 @@ start = ["/usr/bin/sshd", "-D"]
                     state: UnitState::Active,
                     main_pid: Some(123),
                     description: Some("OpenSSH daemon".to_string()),
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
                 }]
             }
         );

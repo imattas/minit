@@ -190,6 +190,13 @@ pub fn render_response(response: &ControlResponse) -> String {
                 if let Some(description) = &unit.description {
                     output.push_str(&format!("description: {description}\n"));
                 }
+                output.push_str(&format!("restart_attempts: {}\n", unit.restart_attempts));
+                if let Some(last_exit_status) = &unit.last_exit_status {
+                    output.push_str(&format!("last_exit_status: {last_exit_status}\n"));
+                }
+                if let Some(cgroup_path) = &unit.cgroup_path {
+                    output.push_str(&format!("cgroup_path: {cgroup_path}\n"));
+                }
             }
             output
         }
@@ -330,6 +337,9 @@ mod tests {
                 state: UnitState::Active,
                 main_pid: Some(123),
                 description: Some("OpenSSH daemon".to_string()),
+                restart_attempts: 2,
+                last_exit_status: Some("exit 1".to_string()),
+                cgroup_path: Some("/sys/fs/cgroup/minit/sshd".to_string()),
             }],
         };
 
@@ -339,6 +349,9 @@ mod tests {
         assert!(output.contains("state: active"));
         assert!(output.contains("main_pid: 123"));
         assert!(output.contains("description: OpenSSH daemon"));
+        assert!(output.contains("restart_attempts: 2"));
+        assert!(output.contains("last_exit_status: exit 1"));
+        assert!(output.contains("cgroup_path: /sys/fs/cgroup/minit/sshd"));
     }
 
     #[test]
