@@ -21,19 +21,22 @@ This review tracks the current PID 1 trust boundary and the v0.5 hardening contr
 - `private_tmp`, read-only path policy, and read-write path policy are rejected until implemented.
 - The control protocol is local Unix socket JSON; there is no remote transport.
 - cgroup resource values are validated by the kernel when written, not by a full local grammar.
-- The fuzz harnesses are present but not yet part of CI.
+- The fuzz harnesses are run by the scheduled and pull-request security workflow as bounded smokes.
+- Dependency advisories are checked by `cargo audit` in the security workflow.
 
 ## Local Fuzz Commands
 
 ```powershell
+cargo install cargo-audit
 cargo install cargo-fuzz
-cargo fuzz run unit_parse
-cargo fuzz run ipc_decode
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-security.ps1
 ```
+
+On Windows, the local script runs dependency audit and skips fuzz by default because `cargo fuzz` requires the LLVM ASAN runtime. Run the fuzz smokes on Linux or pass `-RequireFuzz` on Windows after installing the ASAN runtime. The GitHub security workflow runs fuzz on Ubuntu.
 
 ## Follow-Up Hardening
 
-- Add CI jobs or scheduled local gates for fuzz targets.
+- Expand bounded fuzz smokes into longer overnight fuzz campaigns with corpus retention.
 - Add named user/group lookup outside PID 1 or in a tightly scoped helper.
 - Implement or keep rejecting filesystem sandboxing options.
 - Add seccomp profile support after service execution and logging semantics are more mature.

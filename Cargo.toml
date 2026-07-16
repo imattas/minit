@@ -11,7 +11,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://example.invalid/minit"
+repository = "https://github.com/imattas/minit"
 
 [workspace.dependencies]
 minit-core = { path = "crates/minit-core" }

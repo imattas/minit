@@ -69,7 +69,10 @@ $entries = Get-ChildItem -Path $packageRoot -File -Recurse |
     }
 $entries += "$((Get-FileHash -Algorithm SHA256 -LiteralPath $archivePath).Hash.ToLowerInvariant())  ../$packageName.zip"
 Set-Content -Path $checksumFile -Value $entries -Encoding ASCII
+$publishedChecksumFile = Join-Path $OutputDir "$packageName-SHA256SUMS"
+Copy-Item -LiteralPath $checksumFile -Destination $publishedChecksumFile -Force
 
 Write-Output "Packaged $packageRoot"
 Write-Output "Archive $archivePath"
 Write-Output "Checksums $checksumFile"
+Write-Output "Published checksums $publishedChecksumFile"

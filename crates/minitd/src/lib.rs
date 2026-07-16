@@ -17,6 +17,7 @@ pub struct NormalConfig {
     pub unit_dir: PathBuf,
     pub socket: control::ControlSocketConfig,
     pub smoke_status_unit: Option<String>,
+    pub smoke_list_unit: Option<String>,
     pub smoke_start_unit: Option<String>,
     pub smoke_stop_unit: Option<String>,
     pub smoke_restart_unit: Option<String>,
@@ -39,6 +40,7 @@ impl Default for NormalConfig {
             unit_dir: PathBuf::from(DEFAULT_UNIT_DIR),
             socket: control::ControlSocketConfig::default(),
             smoke_status_unit: None,
+            smoke_list_unit: None,
             smoke_start_unit: None,
             smoke_stop_unit: None,
             smoke_restart_unit: None,
@@ -211,6 +213,8 @@ pub fn normal_config_from_kernel_cmdline(
             );
         } else if let Some(value) = arg.strip_prefix("minit.smoke_status=") {
             config.smoke_status_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_list=") {
+            config.smoke_list_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_start=") {
             config.smoke_start_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_stop=") {
@@ -261,6 +265,9 @@ where
     }
     if arg_config.smoke_status_unit.is_some() {
         config.smoke_status_unit = arg_config.smoke_status_unit;
+    }
+    if arg_config.smoke_list_unit.is_some() {
+        config.smoke_list_unit = arg_config.smoke_list_unit;
     }
     if arg_config.smoke_start_unit.is_some() {
         config.smoke_start_unit = arg_config.smoke_start_unit;
@@ -520,6 +527,14 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/sleep 1; /bin/minitctl --socket {socket_path} status {unit}"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_list_unit {
+            socket.max_requests = Some(1);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!("/bin/minitctl --socket {socket_path} list | /bin/busybox grep {unit}"),
+            ]);
         } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
             socket.startup_command = Some(vec![
@@ -540,6 +555,7 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
         match control::run_control_socket(&socket, &mut service) {
             Ok(()) => {
                 if (config.smoke_status_unit.is_some()
+                    || config.smoke_list_unit.is_some()
                     || config.smoke_start_unit.is_some()
                     || config.smoke_stop_unit.is_some()
                     || config.smoke_restart_unit.is_some()
@@ -722,6 +738,7 @@ mod tests {
         );
         assert_eq!(config.socket.max_requests, Some(1));
         assert_eq!(config.smoke_status_unit.as_deref(), None);
+        assert_eq!(config.smoke_list_unit.as_deref(), None);
         assert_eq!(config.smoke_start_unit.as_deref(), None);
         assert_eq!(config.smoke_stop_unit.as_deref(), None);
         assert_eq!(config.smoke_restart_unit.as_deref(), None);
@@ -746,6 +763,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.smoke_status_unit.as_deref(), Some("sshd"));
+    }
+
+    #[test]
+    fn normal_config_parses_smoke_list_unit() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_list=sshd",
+        )
+        .unwrap();
+
+        assert_eq!(config.smoke_list_unit.as_deref(), Some("sshd"));
     }
 
     #[test]

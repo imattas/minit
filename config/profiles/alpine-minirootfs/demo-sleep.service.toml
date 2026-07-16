@@ -1,0 +1,15 @@
+[unit]
+name = "demo-sleep"
+description = "Alpine minirootfs long-running smoke service"
+kind = "service"
+
+[exec]
+start = ["/bin/sleep", "600"]
+
+[restart]
+policy = "on-failure"
+limit = "3/min"
+backoff = "fixed"
+
+[security]
+no_new_privileges = true

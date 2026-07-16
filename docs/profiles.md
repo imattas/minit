@@ -35,3 +35,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\build-profile-initr
 - No broad systemd compatibility is claimed.
 - The profile assumes distro-provided binaries exist at the configured absolute paths.
 - The profile is intended for disposable VM validation before any host use.
+## Alpine Minirootfs
+
+`config/profiles/alpine-minirootfs` is the first reproducible distro-rootfs validation profile. It intentionally uses only commands available in Alpine's minirootfs so the VM gate does not depend on package installation.
+
+Run it with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-alpine-minirootfs.ps1 -Kernel C:\minit-vm\bzImage
+```
+
+The verifier downloads and SHA256-checks Alpine's minirootfs, builds a `minit` initramfs from that root filesystem, and boots `alpine-smoke.target` in QEMU.

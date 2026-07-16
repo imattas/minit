@@ -1,0 +1,10 @@
+[unit]
+name = "alpine-smoke.target"
+description = "Alpine minirootfs smoke target"
+kind = "target"
+
+[dependencies]
+wants = [
+  "network.service",
+  "demo-sleep",
+]

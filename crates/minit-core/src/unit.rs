@@ -707,13 +707,15 @@ fstype = "tmpfs"
     fn parses_all_profile_unit_files() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let profiles_dir = std::path::Path::new(manifest_dir).join("../../config/profiles");
-        let mut parsed = 0;
+        let mut profile_counts = std::collections::BTreeMap::new();
 
         for profile in std::fs::read_dir(&profiles_dir).expect("config/profiles should exist") {
             let profile = profile.expect("profile entry should be readable");
             if !profile.path().is_dir() {
                 continue;
             }
+            let profile_name = profile.file_name().to_string_lossy().to_string();
+            let mut parsed = 0;
             for entry in std::fs::read_dir(profile.path()).expect("profile should be readable") {
                 let path = entry.expect("profile unit should be readable").path();
                 if path.extension().and_then(|value| value.to_str()) != Some("toml") {
@@ -726,8 +728,10 @@ fstype = "tmpfs"
                 unit.validate().expect("profile unit should validate");
                 parsed += 1;
             }
+            profile_counts.insert(profile_name, parsed);
         }
 
-        assert_eq!(parsed, 5);
+        assert_eq!(profile_counts.get("minimal-distro"), Some(&5));
+        assert_eq!(profile_counts.get("alpine-minirootfs"), Some(&3));
     }
 }

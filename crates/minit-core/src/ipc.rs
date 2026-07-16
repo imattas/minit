@@ -7,6 +7,7 @@ pub const DEFAULT_CONTROL_SOCKET: &str = "/run/minit/minitd.sock";
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlRequest {
     Status { unit: Option<String> },
+    List,
     Explain { unit: String },
     Events,
     Start { unit: String },
@@ -155,6 +156,16 @@ mod tests {
         assert_eq!(
             decode_response(&encode_response(&response).unwrap()).unwrap(),
             response
+        );
+    }
+
+    #[test]
+    fn list_request_round_trips() {
+        let request = ControlRequest::List;
+
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
         );
     }
 

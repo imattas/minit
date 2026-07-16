@@ -15,6 +15,32 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-release.ps1 `
 
 The gate verifies formatting, unit tests, Linux builds, release packaging and checksums, initramfs generation, service lifecycle, restart policy, target boot, mount handling, events, long-running supervision, repeated boot/shutdown loops, stuck-process handling, and shutdown escalation.
 
+For release-candidate stress validation, run the same gate with a longer boot loop:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-release.ps1 `
+  -Kernel C:\minit-vm\bzImage `
+  -BusyBoxPath C:\minit-vm\busybox `
+  -VmTimeoutSeconds 30 `
+  -ExtendedVmStress `
+  -StressBootCount 25
+```
+
+Run the Alpine minirootfs distro-rootfs gate before publishing a daily-driver candidate:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-alpine-minirootfs.ps1 `
+  -Kernel C:\minit-vm\bzImage
+```
+
+## Release Artifact Integrity
+
+Tag builds produce checksums and GitHub artifact attestations. Maintainers can also create local GPG detached signatures:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\sign-release.ps1 -OutputDir tools\release\artifacts -GpgKey <key-id>
+```
+
 ## Emergency Rescue Path
 
 Keep a separate known-good boot entry and initramfs. For testing, always keep a rescue shell path that does not depend on `minit.normal=1`.

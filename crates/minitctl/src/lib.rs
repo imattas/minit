@@ -17,6 +17,7 @@ pub struct Cli {
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
     Status { unit: Option<String> },
+    List,
     Explain { unit: String },
     Events,
     Start { unit: String },
@@ -69,10 +70,15 @@ pub fn control_socket_for_cli(cli: &Cli) -> &str {
 }
 
 pub fn run_with_transport<T: ControlTransport>(cli: Cli, transport: &mut T) -> i32 {
-    let request = command_to_request(cli.command);
+    let command = cli.command;
+    let request = command_to_request(command.clone());
     match transport.round_trip(&request) {
         Ok(response) => {
-            print!("{}", render_response(&response));
+            let output = match command {
+                Command::List => render_list_response(&response),
+                _ => render_response(&response),
+            };
+            print!("{output}");
             0
         }
         Err(err) => {
@@ -166,11 +172,40 @@ impl ControlTransport for UnavailableTransport {
 pub fn command_to_request(command: Command) -> ControlRequest {
     match command {
         Command::Status { unit } => ControlRequest::Status { unit },
+        Command::List => ControlRequest::List,
         Command::Explain { unit } => ControlRequest::Explain { unit },
         Command::Events => ControlRequest::Events,
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
         Command::Restart { unit } => ControlRequest::Restart { unit },
+    }
+}
+
+pub fn render_list_response(response: &ControlResponse) -> String {
+    match response {
+        ControlResponse::Status { units } => {
+            if units.is_empty() {
+                return "no units\n".to_string();
+            }
+
+            let mut output = String::new();
+            for unit in units {
+                let pid = unit
+                    .main_pid
+                    .map(|pid| pid.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                let description = unit.description.as_deref().unwrap_or("-");
+                output.push_str(&format!(
+                    "{}\t{}\t{}\t{}\n",
+                    unit.unit,
+                    render_unit_state(&unit.state),
+                    pid,
+                    description
+                ));
+            }
+            output
+        }
+        other => render_response(other),
     }
 }
 
@@ -298,6 +333,13 @@ mod tests {
     }
 
     #[test]
+    fn parses_list_command() {
+        let cli = Cli::parse_from(["minitctl", "list"]);
+
+        assert_eq!(cli.command, Command::List);
+    }
+
+    #[test]
     fn parses_explain_command() {
         let cli = Cli::parse_from(["minitctl", "explain", "multi-user.target"]);
 
@@ -372,6 +414,7 @@ mod tests {
                 unit: "sshd".to_string()
             }
         );
+        assert_eq!(command_to_request(Command::List), ControlRequest::List);
         assert_eq!(
             command_to_request(Command::Explain {
                 unit: "sshd".to_string()
@@ -406,6 +449,39 @@ mod tests {
         assert!(output.contains("restart_attempts: 2"));
         assert!(output.contains("last_exit_status: exit 1"));
         assert!(output.contains("cgroup_path: /sys/fs/cgroup/minit/sshd"));
+    }
+
+    #[test]
+    fn renders_list_response_compactly() {
+        let response = ControlResponse::Status {
+            units: vec![
+                UnitStatus {
+                    unit: "getty.service".to_string(),
+                    state: UnitState::Inactive,
+                    main_pid: None,
+                    description: Some("Console login".to_string()),
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
+                },
+                UnitStatus {
+                    unit: "sshd.service".to_string(),
+                    state: UnitState::Active,
+                    main_pid: Some(42),
+                    description: Some("OpenSSH daemon".to_string()),
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
+                },
+            ],
+        };
+
+        let output = render_list_response(&response);
+
+        assert_eq!(
+            output,
+            "getty.service\tinactive\t-\tConsole login\nsshd.service\tactive\t42\tOpenSSH daemon\n"
+        );
     }
 
     #[test]

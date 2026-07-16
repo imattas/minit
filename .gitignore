@@ -1,4 +1,5 @@
 /target/
+/fuzz/target/
 /.superpowers/
 /.worktrees/
 /tests/vm/artifacts/

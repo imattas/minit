@@ -1,7 +1,9 @@
 param(
     [string]$Kernel,
     [string]$BusyBoxPath,
-    [int]$VmTimeoutSeconds = 25
+    [int]$VmTimeoutSeconds = 25,
+    [switch]$ExtendedVmStress,
+    [int]$StressBootCount = 25
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,6 +48,14 @@ if ($Kernel -and $BusyBoxPath) {
             -Initramfs $initramfs `
             -NormalMode `
             -ExpectStatusUnit sshd `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
+    Invoke-Step "vm list smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectListUnit sshd `
             -TimeoutSeconds $VmTimeoutSeconds
     }
     Invoke-Step "vm service lifecycle smoke" {
@@ -134,6 +144,15 @@ if ($Kernel -and $BusyBoxPath) {
             -Initramfs $initramfs `
             -Count 2 `
             -TimeoutSeconds $VmTimeoutSeconds
+    }
+    if ($ExtendedVmStress) {
+        Invoke-Step "extended VM boot loop stress" {
+            powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-boot-loop.ps1 `
+                -Kernel $Kernel `
+                -Initramfs $initramfs `
+                -Count $StressBootCount `
+                -TimeoutSeconds $VmTimeoutSeconds
+        }
     }
     Invoke-Step "vm stuck stop escalation smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `

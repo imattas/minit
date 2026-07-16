@@ -102,6 +102,12 @@ impl<R: ControlRuntime> ControlService<R> {
                     message: error.to_string(),
                 },
             },
+            ControlRequest::List => match self.services.status(None) {
+                Ok(units) => ControlResponse::Status { units },
+                Err(error) => ControlResponse::Error {
+                    message: error.to_string(),
+                },
+            },
             ControlRequest::Explain { unit } => match self.services.explain(&unit) {
                 Ok(lines) => ControlResponse::Explanation { unit, lines },
                 Err(error) => ControlResponse::Error {
@@ -188,6 +194,7 @@ impl<R: ControlRuntime> ControlService<R> {
 pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
     match request {
         ControlRequest::Status { .. } => ControlResponse::Status { units: Vec::new() },
+        ControlRequest::List => ControlResponse::Status { units: Vec::new() },
         ControlRequest::Explain { unit } => ControlResponse::Explanation {
             unit,
             lines: Vec::new(),
@@ -322,6 +329,13 @@ mod tests {
     }
 
     #[test]
+    fn list_request_returns_empty_status_until_manager_exists() {
+        let response = handle_control_request(ControlRequest::List);
+
+        assert_eq!(response, ControlResponse::Status { units: Vec::new() });
+    }
+
+    #[test]
     fn lifecycle_requests_return_explicit_unimplemented_errors() {
         let response = handle_control_request(ControlRequest::Start {
             unit: "sshd".to_string(),
@@ -393,6 +407,28 @@ start = ["/usr/bin/sshd", "-D"]
         let response = service.handle_request(ControlRequest::Status {
             unit: Some("sshd.service".to_string()),
         });
+
+        assert_eq!(
+            response,
+            ControlResponse::Status {
+                units: vec![minit_core::ipc::UnitStatus {
+                    unit: "sshd.service".to_string(),
+                    state: UnitState::Inactive,
+                    main_pid: None,
+                    description: Some("OpenSSH daemon".to_string()),
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn control_service_lists_registered_units() {
+        let mut service = ControlService::new(service_manager_with_sshd());
+
+        let response = service.handle_request(ControlRequest::List);
 
         assert_eq!(
             response,

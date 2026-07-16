@@ -5,6 +5,7 @@ param(
     [switch]$NormalMode,
     [switch]$AutoShutdownSmoke,
     [string]$ExpectStatusUnit,
+    [string]$ExpectListUnit,
     [string]$ExpectStartUnit,
     [string]$ExpectStopUnit,
     [string]$ExpectRestartUnit,
@@ -32,6 +33,9 @@ if ($AutoShutdownSmoke) {
 }
 if ($ExpectStatusUnit) {
     $append = "$append minit.smoke_status=$ExpectStatusUnit"
+}
+if ($ExpectListUnit) {
+    $append = "$append minit.smoke_list=$ExpectListUnit"
 }
 if ($ExpectStartUnit) {
     $append = "$append minit.smoke_start=$ExpectStartUnit"
@@ -80,7 +84,7 @@ if ($AppendExtra) {
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLongRunningUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLongRunningUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -213,9 +217,16 @@ try {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
                     exit 0
                 }
-            } else {
-            Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
-            exit 0
+            }
+            if ($ExpectListUnit) {
+                if ($output.Contains("$ExpectListUnit")) {
+                    Write-Output "Detected minitctl list entry for $ExpectListUnit; VM list smoke passed."
+                    exit 0
+                }
+            }
+            if (-not $ExpectStatusUnit -and -not $ExpectListUnit) {
+                Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
+                exit 0
             }
         }
         if ($output.Contains("/ #") -or $output.Contains("can't access tty; job control turned off")) {
@@ -346,6 +357,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected minitctl status for $ExpectStatusUnit was detected."
+        exit 5
+    }
+    if ($ExpectListUnit) {
+        if ($output.Contains("$ExpectListUnit")) {
+            Write-Output "Detected minitctl list entry for $ExpectListUnit; VM list smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected minitctl list entry for $ExpectListUnit was detected."
         exit 5
     }
     if ($NormalMode -and $output.Contains("minitd: normal mode ready")) {
