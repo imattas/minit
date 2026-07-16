@@ -30,6 +30,7 @@ pub struct NormalConfig {
     pub smoke_mount_failure_unit: Option<String>,
     pub smoke_shutdown_mount_unit: Option<String>,
     pub smoke_events_unit: Option<String>,
+    pub smoke_long_running_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -51,6 +52,7 @@ impl Default for NormalConfig {
             smoke_mount_failure_unit: None,
             smoke_shutdown_mount_unit: None,
             smoke_events_unit: None,
+            smoke_long_running_unit: None,
         }
     }
 }
@@ -235,6 +237,8 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_shutdown_mount_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_events=") {
             config.smoke_events_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_long_running=") {
+            config.smoke_long_running_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -296,6 +300,9 @@ where
     }
     if arg_config.smoke_events_unit.is_some() {
         config.smoke_events_unit = arg_config.smoke_events_unit;
+    }
+    if arg_config.smoke_long_running_unit.is_some() {
+        config.smoke_long_running_unit = arg_config.smoke_long_running_unit;
     }
     Ok(config)
 }
@@ -503,6 +510,16 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} events"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_long_running_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/sleep 1; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
             socket.startup_command = Some(vec![
@@ -535,7 +552,8 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_mount_unit.is_some()
                     || config.smoke_mount_failure_unit.is_some()
                     || config.smoke_shutdown_mount_unit.is_some()
-                    || config.smoke_events_unit.is_some())
+                    || config.smoke_events_unit.is_some()
+                    || config.smoke_long_running_unit.is_some())
                     && std::process::id() == 1
                 {
                     if let Err(error) = service.shutdown() {
@@ -717,6 +735,7 @@ mod tests {
         assert_eq!(config.smoke_mount_failure_unit.as_deref(), None);
         assert_eq!(config.smoke_shutdown_mount_unit.as_deref(), None);
         assert_eq!(config.smoke_events_unit.as_deref(), None);
+        assert_eq!(config.smoke_long_running_unit.as_deref(), None);
     }
 
     #[test]
@@ -855,5 +874,18 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.smoke_events_unit.as_deref(), Some("demo-sleep"));
+    }
+
+    #[test]
+    fn normal_config_parses_long_running_smoke() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_long_running=long-running.service",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.smoke_long_running_unit.as_deref(),
+            Some("long-running.service")
+        );
     }
 }

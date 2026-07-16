@@ -46,6 +46,7 @@ Copy-Item -LiteralPath (Join-Path $binaryRoot "minitctl") -Destination (Join-Pat
 Copy-Item -Path "config/examples/*.toml" -Destination (Join-Path $packageRoot "etc/minit/services") -Force
 Copy-Item -LiteralPath "README.md" -Destination (Join-Path $packageRoot "docs/README.md") -Force
 Copy-Item -LiteralPath "ROADMAP.md" -Destination (Join-Path $packageRoot "docs/ROADMAP.md") -Force
+Copy-Item -LiteralPath "docs/daily-driver-candidate.md" -Destination (Join-Path $packageRoot "docs/daily-driver-candidate.md") -Force
 Copy-Item -LiteralPath "docs/install.md" -Destination (Join-Path $packageRoot "install/install.md") -Force
 Copy-Item -LiteralPath "docs/release-template.md" -Destination (Join-Path $packageRoot "docs/release-template.md") -Force
 

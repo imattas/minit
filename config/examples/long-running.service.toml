@@ -1,0 +1,8 @@
+[unit]
+name = "long-running.service"
+description = "Long-running service supervision smoke"
+kind = "service"
+
+[exec]
+start = ["/bin/sleep", "5"]
+stop_timeout = "500ms"

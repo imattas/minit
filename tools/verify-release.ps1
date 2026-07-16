@@ -120,6 +120,21 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectEventsUnit demo-sleep `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm long-running service smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectLongRunningUnit long-running.service `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
+    Invoke-Step "vm boot loop smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-boot-loop.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -Count 2 `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm stuck stop escalation smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

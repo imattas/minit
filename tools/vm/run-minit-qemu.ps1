@@ -18,6 +18,7 @@ param(
     [string]$ExpectMountFailureUnit,
     [string]$ExpectShutdownMountUnit,
     [string]$ExpectEventsUnit,
+    [string]$ExpectLongRunningUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -71,12 +72,15 @@ if ($ExpectShutdownMountUnit) {
 if ($ExpectEventsUnit) {
     $append = "$append minit.smoke_events=$ExpectEventsUnit"
 }
+if ($ExpectLongRunningUnit) {
+    $append = "$append minit.smoke_long_running=$ExpectLongRunningUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLongRunningUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -195,6 +199,12 @@ try {
             if ($ExpectEventsUnit) {
                 if ($output.Contains("accepted: started $ExpectEventsUnit") -and $output.Contains("event: 1") -and $output.Contains("scope: control") -and $output.Contains("message: started $ExpectEventsUnit")) {
                     Write-Output "Detected minitctl events for $ExpectEventsUnit; VM events smoke passed."
+                    exit 0
+                }
+            }
+            if ($ExpectLongRunningUnit) {
+                if ($output.Contains("accepted: started $ExpectLongRunningUnit") -and $output.Contains("unit: $ExpectLongRunningUnit") -and $output.Contains("state: active")) {
+                    Write-Output "Detected long-running active service for $ExpectLongRunningUnit; VM long-running smoke passed."
                     exit 0
                 }
             }
@@ -320,6 +330,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected events proof for $ExpectEventsUnit was detected."
+        exit 5
+    }
+    if ($ExpectLongRunningUnit) {
+        if ($output.Contains("accepted: started $ExpectLongRunningUnit") -and $output.Contains("unit: $ExpectLongRunningUnit") -and $output.Contains("state: active")) {
+            Write-Output "Detected long-running active service for $ExpectLongRunningUnit; VM long-running smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected long-running service proof for $ExpectLongRunningUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {
