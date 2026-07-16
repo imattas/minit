@@ -1,0 +1,16 @@
+[unit]
+name = "rescue-shell"
+description = "Emergency rescue shell"
+kind = "service"
+
+[exec]
+start = ["/bin/sh"]
+working_directory = "/"
+
+[restart]
+policy = "never"
+
+[security]
+user = "root"
+group = "root"
+no_new_privileges = false

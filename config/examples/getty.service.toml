@@ -1,0 +1,21 @@
+[unit]
+name = "getty-tty1"
+description = "Console getty on tty1"
+kind = "service"
+
+[exec]
+start = ["/sbin/agetty", "--noclear", "tty1", "linux"]
+working_directory = "/"
+
+[dependencies]
+after = ["local-fs.target"]
+
+[restart]
+policy = "always"
+limit = "10/min"
+backoff = "fixed"
+
+[security]
+user = "root"
+group = "root"
+no_new_privileges = true

@@ -210,4 +210,28 @@ environment = ["RUST_LOG=info"]
 
         assert_eq!(error.field(), "exec.start[0]");
     }
+
+    #[test]
+    fn parses_all_example_service_files() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let examples_dir =
+            std::path::Path::new(manifest_dir).join("../../config/examples");
+        let entries =
+            std::fs::read_dir(&examples_dir).expect("config/examples should exist");
+        let mut parsed = 0;
+
+        for entry in entries {
+            let path = entry.expect("example entry should be readable").path();
+            if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+                continue;
+            }
+
+            let input = std::fs::read_to_string(&path).expect("example should be readable");
+            let unit = parse_unit_toml(&input).expect("example should parse");
+            unit.validate().expect("example should validate");
+            parsed += 1;
+        }
+
+        assert_eq!(parsed, 3);
+    }
 }

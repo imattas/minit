@@ -1,0 +1,28 @@
+[unit]
+name = "sshd"
+description = "OpenSSH daemon"
+kind = "service"
+
+[exec]
+start = ["/usr/bin/sshd", "-D"]
+reload = ["/bin/kill", "-HUP", "$MAINPID"]
+stop = ["/bin/kill", "TERM", "$MAINPID"]
+working_directory = "/"
+
+[dependencies]
+after = ["network-online.target"]
+requires = ["network.target"]
+
+[restart]
+policy = "on-failure"
+limit = "5/min"
+backoff = "exponential"
+max_delay = "5min"
+
+[security]
+user = "root"
+group = "root"
+no_new_privileges = true
+private_tmp = true
+readonly_paths = ["/usr"]
+readwrite_paths = ["/var/lib/sshd"]
