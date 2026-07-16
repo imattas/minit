@@ -4,6 +4,7 @@ use minit_core::ipc::{
     DEFAULT_CONTROL_SOCKET,
 };
 use minit_core::manager::ServiceManager;
+use std::collections::BTreeSet;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -175,8 +176,32 @@ impl<R: ControlRuntime> ControlService<R> {
                 .services
                 .plan_start_batches(unit)
                 .map_err(|err| err.to_string())?;
+            let mut failed_units = BTreeSet::new();
             for batch in batches {
                 for graph_unit in batch {
+                    if let Some(failed_dependency) = first_failed_required_dependency(
+                        &self.services,
+                        &graph_unit,
+                        &failed_units,
+                    )? {
+                        self.services
+                            .mark_failed(&graph_unit)
+                            .map_err(|err| err.to_string())?;
+                        failed_units.insert(graph_unit.clone());
+                        if self
+                            .services
+                            .is_required_for_start(unit, &graph_unit)
+                            .map_err(|err| err.to_string())?
+                        {
+                            return Err(format!(
+                                "required dependency {failed_dependency} for {graph_unit} failed"
+                            ));
+                        }
+                        eprintln!(
+                            "minitd: skipped optional unit {graph_unit}; required dependency {failed_dependency} failed"
+                        );
+                        continue;
+                    }
                     if self
                         .services
                         .is_target(&graph_unit)
@@ -186,7 +211,20 @@ impl<R: ControlRuntime> ControlService<R> {
                             .mark_active_without_pid(&graph_unit)
                             .map_err(|err| err.to_string())?;
                     } else {
-                        self.runtime.start(&mut self.services, &graph_unit)?;
+                        match self.runtime.start(&mut self.services, &graph_unit) {
+                            Ok(_) => {}
+                            Err(message) => {
+                                failed_units.insert(graph_unit.clone());
+                                if self
+                                    .services
+                                    .is_required_for_start(unit, &graph_unit)
+                                    .map_err(|err| err.to_string())?
+                                {
+                                    return Err(message);
+                                }
+                                eprintln!("minitd: optional unit {graph_unit} failed: {message}");
+                            }
+                        }
                     }
                 }
             }
@@ -195,6 +233,22 @@ impl<R: ControlRuntime> ControlService<R> {
             self.runtime.start(&mut self.services, unit)
         }
     }
+}
+
+fn first_failed_required_dependency(
+    services: &ServiceManager,
+    unit: &str,
+    failed_units: &BTreeSet<String>,
+) -> Result<Option<String>, String> {
+    for required in services
+        .required_dependencies(unit)
+        .map_err(|err| err.to_string())?
+    {
+        if failed_units.contains(&required) {
+            return Ok(Some(required));
+        }
+    }
+    Ok(None)
 }
 
 pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
@@ -475,11 +529,16 @@ start = ["/usr/bin/sshd", "-D"]
     #[derive(Default)]
     struct FakeRuntime {
         calls: Vec<String>,
+        fail_starts: Vec<String>,
     }
 
     impl ControlRuntime for FakeRuntime {
         fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
             self.calls.push(format!("start:{unit}"));
+            if self.fail_starts.iter().any(|failed| failed == unit) {
+                services.mark_failed(unit).map_err(|err| err.to_string())?;
+                return Err(format!("failed to start {unit}"));
+            }
             services
                 .mark_active(unit, 123)
                 .map_err(|err| err.to_string())?;
@@ -626,6 +685,129 @@ wants = ["sshd.service"]
                 }]
             }
         );
+    }
+
+    #[test]
+    fn control_service_start_target_continues_when_wanted_unit_fails() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+wants = ["optional.service", "sshd.service"]
+"#,
+        )
+        .unwrap();
+        let optional = parse_unit_toml(
+            r#"
+[unit]
+name = "optional.service"
+
+[exec]
+start = ["/bin/optional"]
+"#,
+        )
+        .unwrap();
+        let mut services = service_manager_with_sshd();
+        services.add_unit(target).unwrap();
+        services.add_unit(optional).unwrap();
+        let mut service = ControlService::with_runtime(
+            services,
+            FakeRuntime {
+                fail_starts: vec!["optional.service".to_string()],
+                ..FakeRuntime::default()
+            },
+        );
+
+        let response = service.handle_request(ControlRequest::Start {
+            unit: "multi-user.target".to_string(),
+        });
+        let target_status = service.handle_request(ControlRequest::Status {
+            unit: Some("multi-user.target".to_string()),
+        });
+        let optional_status = service.handle_request(ControlRequest::Status {
+            unit: Some("optional.service".to_string()),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Accepted {
+                message: "started target multi-user.target".to_string(),
+            }
+        );
+        assert_eq!(
+            target_status,
+            ControlResponse::Status {
+                units: vec![minit_core::ipc::UnitStatus {
+                    unit: "multi-user.target".to_string(),
+                    state: UnitState::Active,
+                    main_pid: None,
+                    description: None,
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
+                }]
+            }
+        );
+        let ControlResponse::Status { units } = optional_status else {
+            panic!("expected optional unit status");
+        };
+        assert_eq!(units[0].state, UnitState::Failed);
+    }
+
+    #[test]
+    fn control_service_start_target_fails_when_required_unit_fails() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+requires = ["required.service"]
+"#,
+        )
+        .unwrap();
+        let required = parse_unit_toml(
+            r#"
+[unit]
+name = "required.service"
+
+[exec]
+start = ["/bin/required"]
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(target).unwrap();
+        services.add_unit(required).unwrap();
+        let mut service = ControlService::with_runtime(
+            services,
+            FakeRuntime {
+                fail_starts: vec!["required.service".to_string()],
+                ..FakeRuntime::default()
+            },
+        );
+
+        let response = service.handle_request(ControlRequest::Start {
+            unit: "multi-user.target".to_string(),
+        });
+        let target_status = service.handle_request(ControlRequest::Status {
+            unit: Some("multi-user.target".to_string()),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Error {
+                message: "failed to start required.service".to_string(),
+            }
+        );
+        let ControlResponse::Status { units } = target_status else {
+            panic!("expected target status");
+        };
+        assert_eq!(units[0].state, UnitState::Inactive);
     }
 
     #[test]

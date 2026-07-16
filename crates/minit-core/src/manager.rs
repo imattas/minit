@@ -174,6 +174,40 @@ impl ServiceManager {
         Ok(self.record(unit)?.definition.is_swap())
     }
 
+    pub fn required_dependencies(&self, unit: &str) -> Result<Vec<String>, ServiceManagerError> {
+        Ok(self.record(unit)?.definition.dependencies.requires.clone())
+    }
+
+    pub fn is_required_for_start(
+        &self,
+        root: &str,
+        unit: &str,
+    ) -> Result<bool, ServiceManagerError> {
+        let mut visited = std::collections::BTreeSet::new();
+        self.is_required_for_start_inner(root, unit, &mut visited)
+    }
+
+    fn is_required_for_start_inner(
+        &self,
+        current: &str,
+        unit: &str,
+        visited: &mut std::collections::BTreeSet<String>,
+    ) -> Result<bool, ServiceManagerError> {
+        if current == unit {
+            return Ok(true);
+        }
+        if !visited.insert(current.to_string()) {
+            return Ok(false);
+        }
+        let record = self.record(current)?;
+        for required in &record.definition.dependencies.requires {
+            if self.is_required_for_start_inner(required, unit, visited)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn explain(&self, unit: &str) -> Result<Vec<String>, ServiceManagerError> {
         let record = self.record(unit)?;
         let mut lines = vec![
@@ -630,6 +664,53 @@ after = ["network.service"]
             manager.plan_start("network.service").unwrap().argv,
             vec!["/bin/network"]
         );
+    }
+
+    #[test]
+    fn required_for_start_follows_requires_but_not_wants() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+requires = ["required.service"]
+wants = ["wanted.service"]
+"#,
+        )
+        .unwrap();
+        let required = parse_unit_toml(
+            r#"
+[unit]
+name = "required.service"
+
+[exec]
+start = ["/bin/required"]
+"#,
+        )
+        .unwrap();
+        let wanted = parse_unit_toml(
+            r#"
+[unit]
+name = "wanted.service"
+
+[exec]
+start = ["/bin/wanted"]
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(target).unwrap();
+        manager.add_unit(required).unwrap();
+        manager.add_unit(wanted).unwrap();
+
+        assert!(manager
+            .is_required_for_start("multi-user.target", "required.service")
+            .unwrap());
+        assert!(!manager
+            .is_required_for_start("multi-user.target", "wanted.service")
+            .unwrap());
     }
 
     #[test]

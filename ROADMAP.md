@@ -4,7 +4,7 @@
 
 This roadmap is intentionally strict. A phase is not complete until the code, tests, Linux builds, and VM evidence are in place.
 
-Status: the v0.1 through v1.0 candidate roadmap has been implemented and pushed. The current full release gate verifies formatting, unit tests, Linux `musl` builds, release packaging/checksums, initramfs generation, service lifecycle, restart policy, target boot, dependency graph reporting, hardening, mount handling, events, long-running supervision, boot-loop behavior, stuck-process handling, and shutdown escalation.
+Status: the v0.1 through v1.0 candidate roadmap has been implemented and pushed. The current full release gate verifies formatting, unit tests, Linux `musl` builds, release packaging/checksums, initramfs generation, service lifecycle, restart policy, target boot, deterministic target failure propagation, dependency graph reporting, hardening, mount handling, events, long-running supervision, boot-loop behavior, stuck-process handling, and shutdown escalation.
 
 ## Current Baseline
 
@@ -17,6 +17,7 @@ Completed:
 - Unix control socket and `minitctl status/start/stop/restart`.
 - Service cgroups under `/sys/fs/cgroup/minit`.
 - Start, stop, restart, cgroup cleanup, restart policy, and shutdown-stop VM smokes.
+- Target start distinguishes required dependency failures from optional wanted-unit failures.
 - Release verification script: `tools/verify-release.ps1`.
 - GitHub CI for formatting, tests, and Linux `musl` builds.
 - Strict unit parsing, fail-closed unsupported security handling, UID/GID switching, clean environment handling, cgroup v2 resources, fuzz harnesses, and security review notes.
@@ -68,7 +69,7 @@ Must have:
 - Target units.
 - Dependency graph execution in normal mode.
 - Parallel start where dependency ordering allows it.
-- Deterministic failure propagation for `requires`, `wants`, `before`, and `after`.
+- Deterministic failure propagation for `requires` and `wants`, with `before` and `after` covered by graph ordering.
 - `minitctl explain <unit>` showing dependency blockers and reason chain.
 - `minitctl graph <unit>` showing deterministic start batches.
 - VM boot profile that starts a small multi-unit target.
