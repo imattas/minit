@@ -29,6 +29,7 @@ pub enum Command {
         unit: String,
     },
     Events,
+    BootTimeline,
     Start {
         unit: String,
     },
@@ -192,6 +193,7 @@ pub fn command_to_request(command: Command) -> ControlRequest {
         Command::Explain { unit } => ControlRequest::Explain { unit },
         Command::Graph { unit, .. } => ControlRequest::Graph { unit },
         Command::Events => ControlRequest::Events,
+        Command::BootTimeline => ControlRequest::BootTimeline,
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
         Command::Restart { unit } => ControlRequest::Restart { unit },
@@ -285,7 +287,7 @@ pub fn render_response(response: &ControlResponse) -> String {
             }
             output
         }
-        ControlResponse::Events { events } => {
+        ControlResponse::Events { events } | ControlResponse::BootTimeline { events } => {
             if events.is_empty() {
                 return "no events\n".to_string();
             }
@@ -424,6 +426,13 @@ mod tests {
     }
 
     #[test]
+    fn parses_boot_timeline_command() {
+        let cli = Cli::parse_from(["minitctl", "boot-timeline"]);
+
+        assert_eq!(cli.command, Command::BootTimeline);
+    }
+
+    #[test]
     fn parses_lifecycle_commands() {
         assert_eq!(
             Cli::parse_from(["minitctl", "start", "sshd"]).command,
@@ -498,6 +507,10 @@ mod tests {
             }
         );
         assert_eq!(command_to_request(Command::Events), ControlRequest::Events);
+        assert_eq!(
+            command_to_request(Command::BootTimeline),
+            ControlRequest::BootTimeline
+        );
     }
 
     #[test]
@@ -638,6 +651,23 @@ mod tests {
         assert!(output.contains("event: 7"));
         assert!(output.contains("scope: runtime"));
         assert!(output.contains("message: mounted var-log.mount"));
+    }
+
+    #[test]
+    fn renders_boot_timeline_response() {
+        let response = ControlResponse::BootTimeline {
+            events: vec![minit_core::diagnostics::DiagnosticEvent::sequenced(
+                1,
+                "boot",
+                "filesystems prepared",
+            )],
+        };
+
+        let output = render_response(&response);
+
+        assert!(output.contains("event: 1"));
+        assert!(output.contains("scope: boot"));
+        assert!(output.contains("message: filesystems prepared"));
     }
 
     #[test]

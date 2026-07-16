@@ -66,11 +66,11 @@
 - Produces `ControlResponse::BootTimeline { events: Vec<DiagnosticEvent> }`.
 - Produces `minitctl boot-timeline`.
 
-- [ ] Add failing IPC round-trip test.
-- [ ] Add failing CLI parse/render tests.
-- [ ] Record boot timeline events in daemon event buffer.
-- [ ] Implement daemon response.
-- [ ] Add a VM smoke if output is stable enough for release gate.
+- [x] Add failing IPC round-trip test.
+- [x] Add failing CLI parse/render tests.
+- [x] Record boot timeline events in daemon event buffer.
+- [x] Implement daemon response.
+- [x] Add a VM smoke if output is stable enough for release gate.
 
 ### Task 4: Explain Runtime Context
 

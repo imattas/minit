@@ -11,6 +11,7 @@ pub enum ControlRequest {
     Explain { unit: String },
     Graph { unit: String },
     Events,
+    BootTimeline,
     Start { unit: String },
     Stop { unit: String },
     Restart { unit: String },
@@ -53,6 +54,9 @@ pub enum ControlResponse {
         batches: Vec<Vec<String>>,
     },
     Events {
+        events: Vec<crate::diagnostics::DiagnosticEvent>,
+    },
+    BootTimeline {
         events: Vec<crate::diagnostics::DiagnosticEvent>,
     },
     Accepted {
@@ -151,6 +155,27 @@ mod tests {
                 1,
                 "control",
                 "started sshd",
+            )],
+        };
+
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+        assert_eq!(
+            decode_response(&encode_response(&response).unwrap()).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn boot_timeline_request_and_response_round_trip() {
+        let request = ControlRequest::BootTimeline;
+        let response = ControlResponse::BootTimeline {
+            events: vec![crate::diagnostics::DiagnosticEvent::sequenced(
+                1,
+                "boot",
+                "filesystems prepared",
             )],
         };
 

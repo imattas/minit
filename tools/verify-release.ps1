@@ -154,6 +154,14 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectGraphUnit multi-user.target `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm boot timeline smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectBootTimeline `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm long-running service smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

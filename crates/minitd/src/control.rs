@@ -1,4 +1,4 @@
-use minit_core::diagnostics::EventBuffer;
+use minit_core::diagnostics::{DiagnosticEvent, EventBuffer};
 use minit_core::ipc::{
     decode_request, encode_response, ControlRequest, ControlResponse, WireError,
     DEFAULT_CONTROL_SOCKET,
@@ -70,6 +70,7 @@ pub struct ControlService<R = DisabledRuntime> {
     services: ServiceManager,
     runtime: R,
     events: EventBuffer,
+    boot_events: Vec<DiagnosticEvent>,
 }
 
 impl ControlService<DisabledRuntime> {
@@ -78,6 +79,7 @@ impl ControlService<DisabledRuntime> {
             services,
             runtime: DisabledRuntime,
             events: EventBuffer::new(128),
+            boot_events: Vec::new(),
         }
     }
 }
@@ -88,6 +90,20 @@ impl<R: ControlRuntime> ControlService<R> {
             services,
             runtime,
             events: EventBuffer::new(128),
+            boot_events: Vec::new(),
+        }
+    }
+
+    pub fn with_runtime_and_boot_events(
+        services: ServiceManager,
+        runtime: R,
+        boot_events: Vec<DiagnosticEvent>,
+    ) -> Self {
+        Self {
+            services,
+            runtime,
+            events: EventBuffer::new(128),
+            boot_events,
         }
     }
 
@@ -123,6 +139,9 @@ impl<R: ControlRuntime> ControlService<R> {
             },
             ControlRequest::Events => ControlResponse::Events {
                 events: self.events.recent(),
+            },
+            ControlRequest::BootTimeline => ControlResponse::BootTimeline {
+                events: self.boot_events.clone(),
             },
             ControlRequest::Start { unit } => match self.start_unit_or_target(&unit) {
                 Ok(message) => {
@@ -264,6 +283,7 @@ pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
             batches: Vec::new(),
         },
         ControlRequest::Events => ControlResponse::Events { events: Vec::new() },
+        ControlRequest::BootTimeline => ControlResponse::BootTimeline { events: Vec::new() },
         ControlRequest::Start { unit } => not_implemented("start", &unit),
         ControlRequest::Stop { unit } => not_implemented("stop", &unit),
         ControlRequest::Restart { unit } => not_implemented("restart", &unit),
@@ -605,6 +625,30 @@ start = ["/usr/bin/sshd", "-D"]
         assert_eq!(events[0].sequence, 1);
         assert_eq!(events[0].scope, "control");
         assert_eq!(events[0].message, "started sshd.service as pid 123");
+    }
+
+    #[test]
+    fn control_service_returns_boot_timeline() {
+        let mut service = ControlService::with_runtime_and_boot_events(
+            service_manager_with_sshd(),
+            FakeRuntime::default(),
+            vec![
+                DiagnosticEvent::sequenced(1, "boot", "filesystems prepared"),
+                DiagnosticEvent::sequenced(2, "boot", "units loaded"),
+            ],
+        );
+
+        let response = service.handle_request(ControlRequest::BootTimeline);
+
+        assert_eq!(
+            response,
+            ControlResponse::BootTimeline {
+                events: vec![
+                    DiagnosticEvent::sequenced(1, "boot", "filesystems prepared"),
+                    DiagnosticEvent::sequenced(2, "boot", "units loaded"),
+                ],
+            }
+        );
     }
 
     #[test]

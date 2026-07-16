@@ -22,6 +22,7 @@ param(
     [string]$ExpectShutdownMountUnit,
     [string]$ExpectEventsUnit,
     [string]$ExpectGraphUnit,
+    [switch]$ExpectBootTimeline,
     [string]$ExpectLongRunningUnit,
     [string]$AppendExtra,
     [switch]$Help
@@ -88,6 +89,9 @@ if ($ExpectEventsUnit) {
 if ($ExpectGraphUnit) {
     $append = "$append minit.smoke_graph=$ExpectGraphUnit"
 }
+if ($ExpectBootTimeline) {
+    $append = "$append minit.smoke_boot_timeline=1"
+}
 if ($ExpectLongRunningUnit) {
     $append = "$append minit.smoke_long_running=$ExpectLongRunningUnit"
 }
@@ -96,7 +100,7 @@ if ($AppendExtra) {
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectLongRunningUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -236,6 +240,12 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectBootTimeline) {
+                if ($output.Contains("event: 1") -and $output.Contains("scope: boot") -and $output.Contains("message: filesystems prepared") -and $output.Contains("event: 2") -and $output.Contains("message: units loaded")) {
+                    Write-Output "Detected minitctl boot timeline; VM boot-timeline smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectLongRunningUnit) {
                 if ($output.Contains("accepted: started $ExpectLongRunningUnit") -and $output.Contains("unit: $ExpectLongRunningUnit") -and $output.Contains("state: active")) {
                     Write-Output "Detected long-running active service for $ExpectLongRunningUnit; VM long-running smoke passed."
@@ -254,7 +264,7 @@ try {
                     exit 0
                 }
             }
-            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectGraphUnit -and -not $ExpectLongRunningUnit) {
+            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectGraphUnit -and -not $ExpectBootTimeline -and -not $ExpectLongRunningUnit) {
                 Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
                 exit 0
             }
@@ -395,6 +405,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected graph proof for $ExpectGraphUnit was detected."
+        exit 5
+    }
+    if ($ExpectBootTimeline) {
+        if ($output.Contains("event: 1") -and $output.Contains("scope: boot") -and $output.Contains("message: filesystems prepared") -and $output.Contains("event: 2") -and $output.Contains("message: units loaded")) {
+            Write-Output "Detected minitctl boot timeline; VM boot-timeline smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected boot timeline proof was detected."
         exit 5
     }
     if ($ExpectLongRunningUnit) {
