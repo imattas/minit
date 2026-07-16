@@ -114,6 +114,14 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectRequiredFailureTarget required-failure.target `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm failed boot target recovery smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectFailedBootTarget required-failure.target `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm mount smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

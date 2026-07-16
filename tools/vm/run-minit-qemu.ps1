@@ -15,6 +15,7 @@ param(
     [string]$ExpectStuckStopUnit,
     [string]$ExpectShutdownStuckUnit,
     [string]$ExpectBootTarget,
+    [string]$ExpectFailedBootTarget,
     [string]$ExpectWantedFailureTarget,
     [string]$ExpectRequiredFailureTarget,
     [string]$ExpectMountUnit,
@@ -84,6 +85,9 @@ if ($ExpectShutdownStuckUnit) {
 if ($ExpectBootTarget) {
     $append = "$append minit.smoke_boot_target=$ExpectBootTarget"
 }
+if ($ExpectFailedBootTarget) {
+    $append = "$append minit.boot_target=$ExpectFailedBootTarget minit.rescue.autoshutdown=1"
+}
 if ($ExpectWantedFailureTarget) {
     $append = "$append minit.smoke_wanted_failure=$ExpectWantedFailureTarget"
 }
@@ -131,7 +135,7 @@ if ($AppendExtra) {
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectParallelTarget <target>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-ExpectSeccompUnit <unit>] [-ExpectCleanShutdown] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectFailedBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectParallelTarget <target>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-ExpectSeccompUnit <unit>] [-ExpectCleanShutdown] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -226,6 +230,12 @@ try {
             if ($ExpectBootTarget) {
                 if ($output.Contains("accepted: started target $ExpectBootTarget") -and $output.Contains("unit: $ExpectBootTarget") -and $output.Contains("unit: network.service") -and $output.Contains("unit: demo-sleep") -and $output.Contains("state: active")) {
                     Write-Output "Detected multi-unit boot target start for $ExpectBootTarget; VM boot-target smoke passed."
+                    exit 0
+                }
+            }
+            if ($ExpectFailedBootTarget) {
+                if ($output.Contains("minitd: boot target $ExpectFailedBootTarget failed:") -and $output.Contains("minitd: recovery timeline: managed units stopped") -and $output.Contains("reboot: Power down")) {
+                    Write-Output "Detected failed boot target recovery for $ExpectFailedBootTarget; VM recovery smoke passed."
                     exit 0
                 }
             }
@@ -325,7 +335,7 @@ try {
                     exit 0
                 }
             }
-            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectLogsUnit -and -not $ExpectLogsFollowUnit -and -not $ExpectGraphUnit -and -not $ExpectParallelTarget -and -not $ExpectBootTimeline -and -not $ExpectLongRunningUnit -and -not $ExpectHardeningUnit -and -not $ExpectSeccompUnit) {
+            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectFailedBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectLogsUnit -and -not $ExpectLogsFollowUnit -and -not $ExpectGraphUnit -and -not $ExpectParallelTarget -and -not $ExpectBootTimeline -and -not $ExpectLongRunningUnit -and -not $ExpectHardeningUnit -and -not $ExpectSeccompUnit) {
                 Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
                 exit 0
             }
@@ -410,6 +420,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected boot target proof for $ExpectBootTarget was detected."
+        exit 5
+    }
+    if ($ExpectFailedBootTarget) {
+        if ($output.Contains("minitd: boot target $ExpectFailedBootTarget failed:") -and $output.Contains("minitd: recovery timeline: managed units stopped") -and $output.Contains("reboot: Power down")) {
+            Write-Output "Detected failed boot target recovery for $ExpectFailedBootTarget; VM recovery smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected failed boot target recovery for $ExpectFailedBootTarget was detected."
         exit 5
     }
     if ($ExpectWantedFailureTarget) {

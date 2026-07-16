@@ -13,7 +13,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-release.ps1 `
   -VmTimeoutSeconds 30
 ```
 
-The gate verifies formatting, unit tests, Linux builds, release packaging and checksums, initramfs generation, service lifecycle, restart policy, target boot, required-vs-wanted dependency failure behavior, mount handling, events, recent lifecycle logs, graph output, boot timeline output, long-running supervision, repeated boot/shutdown loops, stuck-process handling, and shutdown escalation.
+The gate verifies formatting, unit tests, Linux builds, release packaging and checksums, initramfs generation, service lifecycle, restart policy, target boot, failed boot target rescue fallback, required-vs-wanted dependency failure behavior, mount handling, events, recent lifecycle logs, graph output, boot timeline output, long-running supervision, repeated boot/shutdown loops, stuck-process handling, and shutdown escalation.
 
 For release-candidate stress validation, run the same gate with a longer boot loop:
 
@@ -63,8 +63,10 @@ Rollback path:
 
 1. Boot the previous entry or rescue shell.
 2. Restore the previous initramfs.
-3. Remove `minit.normal=1` and any experimental `minit.*` arguments from the failing boot entry.
+3. Remove `minit.normal=1`, `minit.boot_target=...`, and any experimental `minit.*` arguments from the failing boot entry.
 4. Reboot into the known-good entry before trying a new package.
+
+If a configured `minit.boot_target=<target>` fails during boot, `minitd` stops managed units and enters rescue mode. That fallback is a last-resort recovery path, not a substitute for keeping a separate known-good boot entry.
 
 ## Remaining Limits
 

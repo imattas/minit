@@ -16,6 +16,7 @@ pub const DEFAULT_UNIT_DIR: &str = "/etc/minit/services";
 pub struct NormalConfig {
     pub unit_dir: PathBuf,
     pub socket: control::ControlSocketConfig,
+    pub boot_target: Option<String>,
     pub smoke_status_unit: Option<String>,
     pub smoke_list_unit: Option<String>,
     pub smoke_start_unit: Option<String>,
@@ -48,6 +49,7 @@ impl Default for NormalConfig {
         Self {
             unit_dir: PathBuf::from(DEFAULT_UNIT_DIR),
             socket: control::ControlSocketConfig::default(),
+            boot_target: None,
             smoke_status_unit: None,
             smoke_list_unit: None,
             smoke_start_unit: None,
@@ -229,6 +231,8 @@ pub fn normal_config_from_kernel_cmdline(
                     .parse()
                     .map_err(|_| ConfigError("minit.max_requests must be a number".to_string()))?,
             );
+        } else if let Some(value) = arg.strip_prefix("minit.boot_target=") {
+            config.boot_target = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_status=") {
             config.smoke_status_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_list=") {
@@ -298,6 +302,9 @@ where
     }
     if arg_config.socket.max_requests.is_some() {
         config.socket.max_requests = arg_config.socket.max_requests;
+    }
+    if arg_config.boot_target.is_some() {
+        config.boot_target = arg_config.boot_target;
     }
     if arg_config.smoke_status_unit.is_some() {
         config.smoke_status_unit = arg_config.smoke_status_unit;
@@ -719,6 +726,24 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
         let mut service =
             control::ControlService::with_runtime_and_boot_events(services, runtime, boot_timeline)
                 .with_log_dir("/run/minit/logs");
+        if let Some(target) = &config.boot_target {
+            let response = service.handle_request(minit_core::ipc::ControlRequest::Start {
+                unit: target.clone(),
+            });
+            match boot_target_recovery_action(Some(target), &response) {
+                BootTargetRecoveryAction::Continue => {
+                    eprintln!("minitd: boot target {target} started");
+                }
+                BootTargetRecoveryAction::EnterRescue { message } => {
+                    eprintln!("minitd: {message}; entering rescue mode");
+                    if let Err(error) = service.shutdown() {
+                        eprintln!("minitd: failed to stop services before rescue: {error}");
+                    }
+                    eprintln!("minitd: recovery timeline: managed units stopped");
+                    return run_rescue_entrypoint();
+                }
+            }
+        }
         match control::run_control_socket(&socket, &mut service) {
             Ok(()) => {
                 if (config.smoke_status_unit.is_some()
@@ -770,6 +795,35 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
     {
         let _ = config;
         0
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BootTargetRecoveryAction {
+    Continue,
+    EnterRescue { message: String },
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn boot_target_recovery_action(
+    target: Option<&str>,
+    response: &minit_core::ipc::ControlResponse,
+) -> BootTargetRecoveryAction {
+    let Some(target) = target else {
+        return BootTargetRecoveryAction::Continue;
+    };
+
+    match response {
+        minit_core::ipc::ControlResponse::Accepted { .. } => BootTargetRecoveryAction::Continue,
+        minit_core::ipc::ControlResponse::Error { message } => {
+            BootTargetRecoveryAction::EnterRescue {
+                message: format!("boot target {target} failed: {message}"),
+            }
+        }
+        _ => BootTargetRecoveryAction::EnterRescue {
+            message: format!("boot target {target} failed: unexpected control response"),
+        },
     }
 }
 
@@ -915,6 +969,7 @@ mod tests {
             std::path::PathBuf::from("/run/minit/minitd.sock")
         );
         assert_eq!(config.socket.max_requests, Some(1));
+        assert_eq!(config.boot_target.as_deref(), None);
         assert_eq!(config.smoke_status_unit.as_deref(), None);
         assert_eq!(config.smoke_list_unit.as_deref(), None);
         assert_eq!(config.smoke_start_unit.as_deref(), None);
@@ -950,6 +1005,55 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.smoke_status_unit.as_deref(), Some("sshd"));
+    }
+
+    #[test]
+    fn normal_config_parses_boot_target() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.boot_target=display-login.target",
+        )
+        .unwrap();
+
+        assert_eq!(config.boot_target.as_deref(), Some("display-login.target"));
+    }
+
+    #[test]
+    fn boot_target_recovery_enters_rescue_on_failed_start() {
+        let action = crate::boot_target_recovery_action(
+            Some("required-failure.target"),
+            &minit_core::ipc::ControlResponse::Error {
+                message: "required dependency failed".to_string(),
+            },
+        );
+
+        assert_eq!(
+            action,
+            crate::BootTargetRecoveryAction::EnterRescue {
+                message: "boot target required-failure.target failed: required dependency failed"
+                    .to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn boot_target_recovery_continues_on_accepted_start_or_no_target() {
+        let accepted = minit_core::ipc::ControlResponse::Accepted {
+            message: "started target multi-user.target".to_string(),
+        };
+
+        assert_eq!(
+            crate::boot_target_recovery_action(Some("multi-user.target"), &accepted),
+            crate::BootTargetRecoveryAction::Continue
+        );
+        assert_eq!(
+            crate::boot_target_recovery_action(
+                None,
+                &minit_core::ipc::ControlResponse::Error {
+                    message: "ignored".to_string()
+                },
+            ),
+            crate::BootTargetRecoveryAction::Continue
+        );
     }
 
     #[test]

@@ -55,9 +55,15 @@ impl MountExecutor for LinuxMountExecutor {
             MsFlags::from_bits_truncate(spec.flags),
             None::<&OsStr>,
         )
-        .map_err(|error| MountError::Mount {
-            target: spec.target.to_string(),
-            message: error.to_string(),
+        .or_else(|error| {
+            if error == nix::errno::Errno::EBUSY {
+                Ok(())
+            } else {
+                Err(MountError::Mount {
+                    target: spec.target.to_string(),
+                    message: error.to_string(),
+                })
+            }
         })
     }
 }

@@ -131,10 +131,10 @@ Verification note: Alpine minirootfs gate was available and passed. Debian and A
 - Produces clearer failed-target recovery behavior.
 - Documents rollback-safe install/uninstall path.
 
-- [ ] Add failing tests for failed boot target falling back to rescue behavior.
-- [ ] Add VM smoke for failed boot target recovery.
-- [ ] Add docs for rollback and emergency shell access.
-- [ ] Run focused tests, then full release gate, then commit and push.
+- [x] Add failing tests for failed boot target falling back to rescue behavior.
+- [x] Add VM smoke for failed boot target recovery.
+- [x] Add docs for rollback and emergency shell access.
+- [x] Run focused tests, then full release gate, then commit and push.
 
 ### Task 7: Unit Conversion Helpers
 
