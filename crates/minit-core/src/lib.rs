@@ -1,5 +1,6 @@
 pub mod boot;
 pub mod diagnostics;
+pub mod ipc;
 pub mod unit;
 
 pub const PROJECT_NAME: &str = "minit";

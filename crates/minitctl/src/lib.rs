@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use minit_core::ipc::{ControlRequest, ControlResponse, UnitState};
 
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(name = "minitctl")]
@@ -37,10 +38,59 @@ pub fn render_status_unavailable(unit: Option<&str>) -> String {
     }
 }
 
+pub fn command_to_request(command: Command) -> ControlRequest {
+    match command {
+        Command::Status { unit } => ControlRequest::Status { unit },
+        Command::Start { unit } => ControlRequest::Start { unit },
+        Command::Stop { unit } => ControlRequest::Stop { unit },
+        Command::Restart { unit } => ControlRequest::Restart { unit },
+    }
+}
+
+pub fn render_response(response: &ControlResponse) -> String {
+    match response {
+        ControlResponse::Status { units } => {
+            if units.is_empty() {
+                return "no units\n".to_string();
+            }
+
+            let mut output = String::new();
+            for (index, unit) in units.iter().enumerate() {
+                if index > 0 {
+                    output.push('\n');
+                }
+                output.push_str(&format!("unit: {}\n", unit.unit));
+                output.push_str(&format!("state: {}\n", render_unit_state(&unit.state)));
+                if let Some(main_pid) = unit.main_pid {
+                    output.push_str(&format!("main_pid: {main_pid}\n"));
+                }
+                if let Some(description) = &unit.description {
+                    output.push_str(&format!("description: {description}\n"));
+                }
+            }
+            output
+        }
+        ControlResponse::Accepted { message } => format!("accepted: {message}\n"),
+        ControlResponse::Error { message } => format!("error: {message}\n"),
+    }
+}
+
+fn render_unit_state(state: &UnitState) -> &'static str {
+    match state {
+        UnitState::Unknown => "unknown",
+        UnitState::Inactive => "inactive",
+        UnitState::Starting => "starting",
+        UnitState::Active => "active",
+        UnitState::Stopping => "stopping",
+        UnitState::Failed => "failed",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::Parser;
+    use minit_core::ipc::UnitStatus;
 
     #[test]
     fn parses_status_without_unit() {
@@ -97,5 +147,56 @@ mod tests {
 
         assert!(output.contains("sshd"));
         assert!(output.contains("minitd unavailable"));
+    }
+
+    #[test]
+    fn maps_cli_commands_to_control_requests() {
+        assert_eq!(
+            command_to_request(Command::Status {
+                unit: Some("sshd".to_string())
+            }),
+            ControlRequest::Status {
+                unit: Some("sshd".to_string())
+            }
+        );
+        assert_eq!(
+            command_to_request(Command::Restart {
+                unit: "sshd".to_string()
+            }),
+            ControlRequest::Restart {
+                unit: "sshd".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn renders_status_response() {
+        let response = ControlResponse::Status {
+            units: vec![UnitStatus {
+                unit: "sshd".to_string(),
+                state: UnitState::Active,
+                main_pid: Some(123),
+                description: Some("OpenSSH daemon".to_string()),
+            }],
+        };
+
+        let output = render_response(&response);
+
+        assert!(output.contains("unit: sshd"));
+        assert!(output.contains("state: active"));
+        assert!(output.contains("main_pid: 123"));
+        assert!(output.contains("description: OpenSSH daemon"));
+    }
+
+    #[test]
+    fn renders_accepted_response() {
+        let response = ControlResponse::Accepted {
+            message: "queued restart for sshd".to_string(),
+        };
+
+        assert_eq!(
+            render_response(&response),
+            "accepted: queued restart for sshd\n"
+        );
     }
 }
