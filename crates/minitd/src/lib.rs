@@ -643,11 +643,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn host_run_accepts_rescue_flag() {
         assert_eq!(crate::run_with_args(["minitd", "--rescue"]), 0);
     }
 
     #[test]
+    #[cfg(not(target_os = "linux"))]
     fn host_run_accepts_kernel_rescue_arg() {
         assert_eq!(crate::run_with_args(["minitd", "minit.rescue=1"]), 0);
     }

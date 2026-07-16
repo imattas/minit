@@ -737,12 +737,21 @@ start = ["/usr/bin/sshd", "-D"]
             PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
             "populated 0\nfrozen 0\n".to_string(),
         );
+        let mut signaler = FakeSignaler::default();
 
-        stop_service(&mut services, &cgroups, &mut cgroup_fs, "sshd.service").unwrap();
+        stop_service_with_signaler(
+            &mut services,
+            &cgroups,
+            &mut cgroup_fs,
+            &mut signaler,
+            "sshd.service",
+        )
+        .unwrap();
 
         assert!(!cgroup_fs
             .writes
             .contains_key(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")));
+        assert_eq!(signaler.terminated, vec![321]);
         assert!(cgroup_fs
             .removed
             .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
@@ -800,14 +809,22 @@ start = ["/usr/bin/sshd", "-D"]
             PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
             "populated 1\nfrozen 0\n".to_string(),
         );
+        let mut signaler = FakeSignaler::default();
 
-        let error =
-            stop_service(&mut services, &cgroups, &mut cgroup_fs, "sshd.service").unwrap_err();
+        let error = stop_service_with_signaler(
+            &mut services,
+            &cgroups,
+            &mut cgroup_fs,
+            &mut signaler,
+            "sshd.service",
+        )
+        .unwrap_err();
 
         assert_eq!(
             error,
             RuntimeError::CgroupStillPopulated("sshd.service".to_string())
         );
+        assert_eq!(signaler.terminated, vec![321]);
         assert!(!cgroup_fs
             .removed
             .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
