@@ -11,6 +11,8 @@ param(
     [string]$ExpectCgroupCleanupUnit,
     [string]$ExpectRestartPolicyUnit,
     [string]$ExpectShutdownStopUnit,
+    [string]$ExpectStuckStopUnit,
+    [string]$ExpectShutdownStuckUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -43,12 +45,18 @@ if ($ExpectRestartPolicyUnit) {
 if ($ExpectShutdownStopUnit) {
     $append = "$append minit.smoke_shutdown_stop=$ExpectShutdownStopUnit"
 }
+if ($ExpectStuckStopUnit) {
+    $append = "$append minit.smoke_stuck_stop=$ExpectStuckStopUnit"
+}
+if ($ExpectShutdownStuckUnit) {
+    $append = "$append minit.smoke_shutdown_stuck=$ExpectShutdownStuckUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -128,6 +136,18 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectStuckStopUnit) {
+                if ($output.Contains("accepted: stopped $ExpectStuckStopUnit") -and $output.Contains("minitd: escalated $ExpectStuckStopUnit to cgroup.kill")) {
+                    Write-Output "Detected stuck service stop escalation for $ExpectStuckStopUnit; VM stuck-stop smoke passed."
+                    exit 0
+                }
+            }
+            if ($ExpectShutdownStuckUnit) {
+                if ($output.Contains("unit: $ExpectShutdownStuckUnit") -and $output.Contains("state: active") -and $output.Contains("minitd: escalated $ExpectShutdownStuckUnit to cgroup.kill") -and $output.Contains("minitd: stopped $ExpectShutdownStuckUnit for shutdown")) {
+                    Write-Output "Detected stuck service shutdown escalation for $ExpectShutdownStuckUnit; VM shutdown-stuck smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -194,6 +214,22 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected shutdown stop for $ExpectShutdownStopUnit was detected."
+        exit 5
+    }
+    if ($ExpectStuckStopUnit) {
+        if ($output.Contains("accepted: stopped $ExpectStuckStopUnit") -and $output.Contains("minitd: escalated $ExpectStuckStopUnit to cgroup.kill")) {
+            Write-Output "Detected stuck service stop escalation for $ExpectStuckStopUnit; VM stuck-stop smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected stuck stop escalation for $ExpectStuckStopUnit was detected."
+        exit 5
+    }
+    if ($ExpectShutdownStuckUnit) {
+        if ($output.Contains("unit: $ExpectShutdownStuckUnit") -and $output.Contains("state: active") -and $output.Contains("minitd: escalated $ExpectShutdownStuckUnit to cgroup.kill") -and $output.Contains("minitd: stopped $ExpectShutdownStuckUnit for shutdown")) {
+            Write-Output "Detected stuck service shutdown escalation for $ExpectShutdownStuckUnit; VM shutdown-stuck smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected shutdown escalation for $ExpectShutdownStuckUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {

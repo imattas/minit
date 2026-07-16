@@ -159,6 +159,7 @@ where
 
     if !wait_until_cgroup_empty_for(cgroups, cgroup_fs, unit, 20)? {
         cgroups.kill_unit(cgroup_fs, unit)?;
+        eprintln!("minitd: escalated {unit} to cgroup.kill");
         wait_until_cgroup_empty(cgroups, cgroup_fs, unit)?;
     }
 

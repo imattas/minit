@@ -74,6 +74,22 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectShutdownStopUnit demo-sleep `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm stuck stop escalation smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectStuckStopUnit stubborn `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
+    Invoke-Step "vm stuck shutdown escalation smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectShutdownStuckUnit stubborn `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
 } else {
     Write-Host "Skipping VM smokes. Pass -Kernel and -BusyBoxPath to run the full release gate."
 }

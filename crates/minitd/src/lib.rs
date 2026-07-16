@@ -22,6 +22,8 @@ pub struct NormalConfig {
     pub smoke_cgroup_cleanup_unit: Option<String>,
     pub smoke_restart_policy_unit: Option<String>,
     pub smoke_shutdown_stop_unit: Option<String>,
+    pub smoke_stuck_stop_unit: Option<String>,
+    pub smoke_shutdown_stuck_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -36,6 +38,8 @@ impl Default for NormalConfig {
             smoke_cgroup_cleanup_unit: None,
             smoke_restart_policy_unit: None,
             smoke_shutdown_stop_unit: None,
+            smoke_stuck_stop_unit: None,
+            smoke_shutdown_stuck_unit: None,
         }
     }
 }
@@ -206,6 +210,10 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_restart_policy_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_shutdown_stop=") {
             config.smoke_shutdown_stop_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_stuck_stop=") {
+            config.smoke_stuck_stop_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_shutdown_stuck=") {
+            config.smoke_shutdown_stuck_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -246,6 +254,12 @@ where
     }
     if arg_config.smoke_shutdown_stop_unit.is_some() {
         config.smoke_shutdown_stop_unit = arg_config.smoke_shutdown_stop_unit;
+    }
+    if arg_config.smoke_stuck_stop_unit.is_some() {
+        config.smoke_stuck_stop_unit = arg_config.smoke_stuck_stop_unit;
+    }
+    if arg_config.smoke_shutdown_stuck_unit.is_some() {
+        config.smoke_shutdown_stuck_unit = arg_config.smoke_shutdown_stuck_unit;
     }
     Ok(config)
 }
@@ -381,6 +395,26 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_stuck_stop_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} stop {unit}"
+                ),
+            ]);
+        } else if let Some(unit) = &config.smoke_shutdown_stuck_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
             socket.startup_command = Some(vec![
@@ -406,7 +440,9 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_restart_unit.is_some()
                     || config.smoke_cgroup_cleanup_unit.is_some()
                     || config.smoke_restart_policy_unit.is_some()
-                    || config.smoke_shutdown_stop_unit.is_some())
+                    || config.smoke_shutdown_stop_unit.is_some()
+                    || config.smoke_stuck_stop_unit.is_some()
+                    || config.smoke_shutdown_stuck_unit.is_some())
                     && std::process::id() == 1
                 {
                     if let Err(error) = service.shutdown() {
@@ -579,6 +615,8 @@ mod tests {
         assert_eq!(config.smoke_cgroup_cleanup_unit.as_deref(), None);
         assert_eq!(config.smoke_restart_policy_unit.as_deref(), None);
         assert_eq!(config.smoke_shutdown_stop_unit.as_deref(), None);
+        assert_eq!(config.smoke_stuck_stop_unit.as_deref(), None);
+        assert_eq!(config.smoke_shutdown_stuck_unit.as_deref(), None);
     }
 
     #[test]
@@ -649,6 +687,24 @@ mod tests {
         assert_eq!(
             config.smoke_shutdown_stop_unit.as_deref(),
             Some("demo-sleep")
+        );
+    }
+
+    #[test]
+    fn normal_config_parses_stuck_service_smokes() {
+        let stop = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_stuck_stop=stubborn",
+        )
+        .unwrap();
+        let shutdown = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_shutdown_stuck=stubborn",
+        )
+        .unwrap();
+
+        assert_eq!(stop.smoke_stuck_stop_unit.as_deref(), Some("stubborn"));
+        assert_eq!(
+            shutdown.smoke_shutdown_stuck_unit.as_deref(),
+            Some("stubborn")
         );
     }
 }

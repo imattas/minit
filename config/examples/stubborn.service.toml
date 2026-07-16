@@ -1,0 +1,9 @@
+[unit]
+name = "stubborn"
+description = "Service that ignores SIGTERM for VM stop escalation smoke"
+
+[exec]
+start = ["/bin/sh", "-c", "trap '' TERM; while true; do /bin/sleep 1; done"]
+
+[restart]
+policy = "never"
