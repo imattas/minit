@@ -8,3 +8,4 @@ repository.workspace = true
 [dependencies]
 clap.workspace = true
 minit-core.workspace = true
+thiserror.workspace = true
