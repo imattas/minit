@@ -42,6 +42,53 @@ pub fn existing_rescue_candidates() -> Vec<&'static str> {
     Vec::new()
 }
 
+#[cfg(target_os = "linux")]
+pub fn run_linux_rescue() -> i32 {
+    use crate::early_mounts::{ensure_early_mounts, LinuxMountExecutor};
+    use crate::reaper::{drain_reap_events, LinuxReaper};
+    use minit_core::boot::RescueConfig;
+    use std::process::Command;
+    use std::thread;
+    use std::time::Duration;
+
+    let mut mount_executor = LinuxMountExecutor;
+    if let Err(error) = ensure_early_mounts(&mut mount_executor) {
+        eprintln!("minitd: early mount failed: {error}");
+    }
+
+    let config = RescueConfig::default();
+    let candidates = existing_rescue_candidates();
+    let command = select_rescue_command(&config, &candidates);
+
+    let child_result = Command::new(&command.argv[0]).args(&command.argv[1..]).spawn();
+    let mut child = match child_result {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!(
+                "minitd: failed to start rescue command {:?}: {error}",
+                command.argv
+            );
+            return 1;
+        }
+    };
+
+    let mut reaper = LinuxReaper;
+    loop {
+        if let Err(error) = drain_reap_events(&mut reaper) {
+            eprintln!("minitd: reap failed: {error}");
+        }
+
+        match child.try_wait() {
+            Ok(Some(status)) => return status.code().unwrap_or(0),
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(error) => {
+                eprintln!("minitd: failed to observe rescue command: {error}");
+                return 1;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
