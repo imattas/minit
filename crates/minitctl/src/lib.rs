@@ -20,8 +20,21 @@ where
     I: IntoIterator<Item = S>,
     S: Into<std::ffi::OsString> + Clone,
 {
-    let _cli = Cli::parse_from(args);
+    let cli = Cli::parse_from(args);
+    if let Command::Status { unit } = cli.command {
+        print!("{}", render_status_unavailable(unit.as_deref()));
+    }
     0
+}
+
+pub fn render_status_unavailable(unit: Option<&str>) -> String {
+    let socket = "/run/minit/minitd.sock";
+    match unit {
+        Some(unit) => format!(
+            "unit: {unit}\nstate: unknown\nminitd unavailable: cannot connect to {socket}\n"
+        ),
+        None => format!("state: unknown\nminitd unavailable: cannot connect to {socket}\n"),
+    }
 }
 
 #[cfg(test)]
@@ -68,5 +81,21 @@ mod tests {
                 unit: "sshd".to_string()
             }
         );
+    }
+
+    #[test]
+    fn renders_global_status_when_minitd_is_unavailable() {
+        let output = render_status_unavailable(None);
+
+        assert!(output.contains("minitd unavailable"));
+        assert!(output.contains("/run/minit/minitd.sock"));
+    }
+
+    #[test]
+    fn renders_unit_status_when_minitd_is_unavailable() {
+        let output = render_status_unavailable(Some("sshd"));
+
+        assert!(output.contains("sshd"));
+        assert!(output.contains("minitd unavailable"));
     }
 }
