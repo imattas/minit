@@ -402,4 +402,32 @@ wants = ["getty.service"]
 
         assert_eq!(parsed, 8);
     }
+
+    #[test]
+    fn parses_all_profile_unit_files() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let profiles_dir = std::path::Path::new(manifest_dir).join("../../config/profiles");
+        let mut parsed = 0;
+
+        for profile in std::fs::read_dir(&profiles_dir).expect("config/profiles should exist") {
+            let profile = profile.expect("profile entry should be readable");
+            if !profile.path().is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(profile.path()).expect("profile should be readable") {
+                let path = entry.expect("profile unit should be readable").path();
+                if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+                    continue;
+                }
+
+                let input =
+                    std::fs::read_to_string(&path).expect("profile unit should be readable");
+                let unit = parse_unit_toml(&input).expect("profile unit should parse");
+                unit.validate().expect("profile unit should validate");
+                parsed += 1;
+            }
+        }
+
+        assert_eq!(parsed, 5);
+    }
 }

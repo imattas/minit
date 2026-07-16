@@ -1,0 +1,15 @@
+[unit]
+name = "getty@ttyS0.service"
+description = "Serial console login"
+kind = "service"
+
+[exec]
+start = ["/sbin/getty", "-L", "ttyS0", "115200", "vt100"]
+
+[restart]
+policy = "always"
+limit = "10/min"
+backoff = "fixed"
+
+[security]
+no_new_privileges = true

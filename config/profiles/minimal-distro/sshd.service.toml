@@ -1,0 +1,20 @@
+[unit]
+name = "sshd.service"
+description = "OpenSSH daemon"
+kind = "service"
+
+[exec]
+start = ["/usr/sbin/sshd", "-D", "-e"]
+
+[dependencies]
+requires = ["networking.service"]
+after = ["networking.service"]
+
+[restart]
+policy = "on-failure"
+limit = "5/min"
+backoff = "exponential"
+max_delay = "30s"
+
+[security]
+no_new_privileges = true

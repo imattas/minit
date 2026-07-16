@@ -1,0 +1,12 @@
+[unit]
+name = "display-login.target"
+description = "Minimal login/display profile target"
+kind = "target"
+
+[dependencies]
+wants = [
+  "networking.service",
+  "dbus.service",
+  "sshd.service",
+  "getty@ttyS0.service",
+]

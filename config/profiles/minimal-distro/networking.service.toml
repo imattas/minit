@@ -1,0 +1,15 @@
+[unit]
+name = "networking.service"
+description = "Bring up baseline distro networking"
+kind = "service"
+
+[exec]
+start = ["/sbin/ip", "link", "set", "lo", "up"]
+
+[restart]
+policy = "on-failure"
+limit = "3/min"
+backoff = "fixed"
+
+[security]
+no_new_privileges = true

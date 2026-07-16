@@ -1,0 +1,15 @@
+[unit]
+name = "dbus.service"
+description = "D-Bus system bus"
+kind = "service"
+
+[exec]
+start = ["/usr/bin/dbus-daemon", "--system", "--nofork"]
+
+[restart]
+policy = "on-failure"
+limit = "5/min"
+backoff = "fixed"
+
+[security]
+no_new_privileges = true
