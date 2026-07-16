@@ -106,6 +106,14 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectShutdownMountUnit var-log.mount `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm events smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectEventsUnit demo-sleep `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm stuck stop escalation smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

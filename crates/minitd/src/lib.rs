@@ -29,6 +29,7 @@ pub struct NormalConfig {
     pub smoke_mount_unit: Option<String>,
     pub smoke_mount_failure_unit: Option<String>,
     pub smoke_shutdown_mount_unit: Option<String>,
+    pub smoke_events_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -49,6 +50,7 @@ impl Default for NormalConfig {
             smoke_mount_unit: None,
             smoke_mount_failure_unit: None,
             smoke_shutdown_mount_unit: None,
+            smoke_events_unit: None,
         }
     }
 }
@@ -231,6 +233,8 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_mount_failure_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_shutdown_mount=") {
             config.smoke_shutdown_mount_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_events=") {
+            config.smoke_events_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -289,6 +293,9 @@ where
     }
     if arg_config.smoke_shutdown_mount_unit.is_some() {
         config.smoke_shutdown_mount_unit = arg_config.smoke_shutdown_mount_unit;
+    }
+    if arg_config.smoke_events_unit.is_some() {
+        config.smoke_events_unit = arg_config.smoke_events_unit;
     }
     Ok(config)
 }
@@ -351,6 +358,7 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
             eprintln!("minitd: failed to prepare normal-mode filesystems: {error}");
             return 1;
         }
+        eprintln!("minitd: boot timeline: filesystems prepared");
 
         let services = if config.unit_dir.exists() {
             match units::load_units_from_dir(&config.unit_dir) {
@@ -363,6 +371,7 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
         } else {
             minit_core::manager::ServiceManager::new()
         };
+        eprintln!("minitd: boot timeline: units loaded");
         let mut socket = config.socket.clone();
         if let Some(unit) = &config.smoke_start_unit {
             socket.max_requests = Some(2);
@@ -484,6 +493,16 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_events_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} events"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
             socket.startup_command = Some(vec![
@@ -515,14 +534,17 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_boot_target.is_some()
                     || config.smoke_mount_unit.is_some()
                     || config.smoke_mount_failure_unit.is_some()
-                    || config.smoke_shutdown_mount_unit.is_some())
+                    || config.smoke_shutdown_mount_unit.is_some()
+                    || config.smoke_events_unit.is_some())
                     && std::process::id() == 1
                 {
                     if let Err(error) = service.shutdown() {
                         eprintln!("minitd: failed to stop services during shutdown: {error}");
                     }
+                    eprintln!("minitd: shutdown timeline: managed units stopped");
                     let mut shutdown = shutdown::LinuxShutdownExecutor;
                     let _ = shutdown.sync_filesystems();
+                    eprintln!("minitd: shutdown timeline: filesystems synced");
                     let _ = shutdown.reboot(shutdown::ShutdownAction::Poweroff);
                 }
                 0
@@ -694,6 +716,7 @@ mod tests {
         assert_eq!(config.smoke_mount_unit.as_deref(), None);
         assert_eq!(config.smoke_mount_failure_unit.as_deref(), None);
         assert_eq!(config.smoke_shutdown_mount_unit.as_deref(), None);
+        assert_eq!(config.smoke_events_unit.as_deref(), None);
     }
 
     #[test]
@@ -822,5 +845,15 @@ mod tests {
             shutdown.smoke_shutdown_mount_unit.as_deref(),
             Some("var-log.mount")
         );
+    }
+
+    #[test]
+    fn normal_config_parses_events_smoke() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_events=demo-sleep",
+        )
+        .unwrap();
+
+        assert_eq!(config.smoke_events_unit.as_deref(), Some("demo-sleep"));
     }
 }

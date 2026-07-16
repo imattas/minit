@@ -18,6 +18,7 @@ pub struct Cli {
 pub enum Command {
     Status { unit: Option<String> },
     Explain { unit: String },
+    Events,
     Start { unit: String },
     Stop { unit: String },
     Restart { unit: String },
@@ -166,6 +167,7 @@ pub fn command_to_request(command: Command) -> ControlRequest {
     match command {
         Command::Status { unit } => ControlRequest::Status { unit },
         Command::Explain { unit } => ControlRequest::Explain { unit },
+        Command::Events => ControlRequest::Events,
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
         Command::Restart { unit } => ControlRequest::Restart { unit },
@@ -206,6 +208,21 @@ pub fn render_response(response: &ControlResponse) -> String {
             let mut output = format!("unit: {unit}\n");
             for line in lines {
                 output.push_str(&format!("explain: {line}\n"));
+            }
+            output
+        }
+        ControlResponse::Events { events } => {
+            if events.is_empty() {
+                return "no events\n".to_string();
+            }
+            let mut output = String::new();
+            for (index, event) in events.iter().enumerate() {
+                if index > 0 {
+                    output.push('\n');
+                }
+                output.push_str(&format!("event: {}\n", event.sequence));
+                output.push_str(&format!("scope: {}\n", event.scope));
+                output.push_str(&format!("message: {}\n", event.message));
             }
             output
         }
@@ -293,6 +310,13 @@ mod tests {
     }
 
     #[test]
+    fn parses_events_command() {
+        let cli = Cli::parse_from(["minitctl", "events"]);
+
+        assert_eq!(cli.command, Command::Events);
+    }
+
+    #[test]
     fn parses_lifecycle_commands() {
         assert_eq!(
             Cli::parse_from(["minitctl", "start", "sshd"]).command,
@@ -356,6 +380,7 @@ mod tests {
                 unit: "sshd".to_string()
             }
         );
+        assert_eq!(command_to_request(Command::Events), ControlRequest::Events);
     }
 
     #[test]
@@ -410,6 +435,23 @@ mod tests {
         assert!(output.contains("unit: multi-user.target"));
         assert!(output.contains("explain: kind: target"));
         assert!(output.contains("explain: wants: getty.service"));
+    }
+
+    #[test]
+    fn renders_events_response() {
+        let response = ControlResponse::Events {
+            events: vec![minit_core::diagnostics::DiagnosticEvent::sequenced(
+                7,
+                "runtime",
+                "mounted var-log.mount",
+            )],
+        };
+
+        let output = render_response(&response);
+
+        assert!(output.contains("event: 7"));
+        assert!(output.contains("scope: runtime"));
+        assert!(output.contains("message: mounted var-log.mount"));
     }
 
     #[test]

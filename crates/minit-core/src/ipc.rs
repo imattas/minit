@@ -8,6 +8,7 @@ pub const DEFAULT_CONTROL_SOCKET: &str = "/run/minit/minitd.sock";
 pub enum ControlRequest {
     Status { unit: Option<String> },
     Explain { unit: String },
+    Events,
     Start { unit: String },
     Stop { unit: String },
     Restart { unit: String },
@@ -38,10 +39,22 @@ pub struct UnitStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlResponse {
-    Status { units: Vec<UnitStatus> },
-    Explanation { unit: String, lines: Vec<String> },
-    Accepted { message: String },
-    Error { message: String },
+    Status {
+        units: Vec<UnitStatus>,
+    },
+    Explanation {
+        unit: String,
+        lines: Vec<String>,
+    },
+    Events {
+        events: Vec<crate::diagnostics::DiagnosticEvent>,
+    },
+    Accepted {
+        message: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -122,6 +135,27 @@ mod tests {
         let parsed: ControlResponse = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed, response);
+    }
+
+    #[test]
+    fn events_request_and_response_round_trip() {
+        let request = ControlRequest::Events;
+        let response = ControlResponse::Events {
+            events: vec![crate::diagnostics::DiagnosticEvent::sequenced(
+                1,
+                "control",
+                "started sshd",
+            )],
+        };
+
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+        assert_eq!(
+            decode_response(&encode_response(&response).unwrap()).unwrap(),
+            response
+        );
     }
 
     #[test]

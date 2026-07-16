@@ -1,3 +1,4 @@
+use minit_core::diagnostics::EventBuffer;
 use minit_core::ipc::{
     decode_request, encode_response, ControlRequest, ControlResponse, WireError,
     DEFAULT_CONTROL_SOCKET,
@@ -67,6 +68,7 @@ impl ControlRuntime for DisabledRuntime {
 pub struct ControlService<R = DisabledRuntime> {
     services: ServiceManager,
     runtime: R,
+    events: EventBuffer,
 }
 
 impl ControlService<DisabledRuntime> {
@@ -74,13 +76,18 @@ impl ControlService<DisabledRuntime> {
         Self {
             services,
             runtime: DisabledRuntime,
+            events: EventBuffer::new(128),
         }
     }
 }
 
 impl<R: ControlRuntime> ControlService<R> {
     pub fn with_runtime(services: ServiceManager, runtime: R) -> Self {
-        Self { services, runtime }
+        Self {
+            services,
+            runtime,
+            events: EventBuffer::new(128),
+        }
     }
 
     pub fn handle_request(&mut self, request: ControlRequest) -> ControlResponse {
@@ -101,18 +108,42 @@ impl<R: ControlRuntime> ControlService<R> {
                     message: error.to_string(),
                 },
             },
+            ControlRequest::Events => ControlResponse::Events {
+                events: self.events.recent(),
+            },
             ControlRequest::Start { unit } => match self.start_unit_or_target(&unit) {
-                Ok(message) => ControlResponse::Accepted { message },
-                Err(message) => ControlResponse::Error { message },
+                Ok(message) => {
+                    self.events.record("control", message.clone());
+                    ControlResponse::Accepted { message }
+                }
+                Err(message) => {
+                    self.events
+                        .record("control", format!("start failed: {message}"));
+                    ControlResponse::Error { message }
+                }
             },
             ControlRequest::Stop { unit } => match self.runtime.stop(&mut self.services, &unit) {
-                Ok(message) => ControlResponse::Accepted { message },
-                Err(message) => ControlResponse::Error { message },
+                Ok(message) => {
+                    self.events.record("control", message.clone());
+                    ControlResponse::Accepted { message }
+                }
+                Err(message) => {
+                    self.events
+                        .record("control", format!("stop failed: {message}"));
+                    ControlResponse::Error { message }
+                }
             },
             ControlRequest::Restart { unit } => {
                 match self.runtime.restart(&mut self.services, &unit) {
-                    Ok(message) => ControlResponse::Accepted { message },
-                    Err(message) => ControlResponse::Error { message },
+                    Ok(message) => {
+                        self.events.record("control", message.clone());
+                        ControlResponse::Accepted { message }
+                    }
+                    Err(message) => {
+                        self.events
+                            .record("control", format!("restart failed: {message}"));
+                        ControlResponse::Error { message }
+                    }
                 }
             }
         }
@@ -161,6 +192,7 @@ pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
             unit,
             lines: Vec::new(),
         },
+        ControlRequest::Events => ControlResponse::Events { events: Vec::new() },
         ControlRequest::Start { unit } => not_implemented("start", &unit),
         ControlRequest::Stop { unit } => not_implemented("stop", &unit),
         ControlRequest::Restart { unit } => not_implemented("restart", &unit),
@@ -449,6 +481,25 @@ start = ["/usr/bin/sshd", "-D"]
                 }]
             }
         );
+    }
+
+    #[test]
+    fn control_service_returns_recent_events() {
+        let mut service =
+            ControlService::with_runtime(service_manager_with_sshd(), FakeRuntime::default());
+
+        let _ = service.handle_request(ControlRequest::Start {
+            unit: "sshd.service".to_string(),
+        });
+        let response = service.handle_request(ControlRequest::Events);
+
+        let ControlResponse::Events { events } = response else {
+            panic!("expected events response");
+        };
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].sequence, 1);
+        assert_eq!(events[0].scope, "control");
+        assert_eq!(events[0].message, "started sshd.service as pid 123");
     }
 
     #[test]
