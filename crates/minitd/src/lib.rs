@@ -1,4 +1,5 @@
 pub mod early_mounts;
+pub mod reaper;
 pub mod rescue;
 
 pub fn version() -> &'static str {
