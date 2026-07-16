@@ -88,6 +88,13 @@ impl ServiceManager {
         Ok(())
     }
 
+    pub fn mark_failed(&mut self, unit: &str) -> Result<(), ServiceManagerError> {
+        let record = self.record_mut(unit)?;
+        record.state = UnitState::Failed;
+        record.main_pid = None;
+        Ok(())
+    }
+
     fn record(&self, unit: &str) -> Result<&ServiceRecord, ServiceManagerError> {
         self.units
             .get(unit)
@@ -195,5 +202,19 @@ start = ["/usr/bin/sshd", "-D"]
             error,
             ServiceManagerError::UnknownUnit("missing".to_string())
         );
+    }
+
+    #[test]
+    fn mark_failed_clears_main_pid() {
+        let mut manager = ServiceManager::new();
+        manager.add_unit(parsed_unit()).unwrap();
+        manager.plan_start("sshd").unwrap();
+        manager.mark_active("sshd", 123).unwrap();
+
+        manager.mark_failed("sshd").unwrap();
+        let statuses = manager.status(Some("sshd")).unwrap();
+
+        assert_eq!(statuses[0].state, UnitState::Failed);
+        assert_eq!(statuses[0].main_pid, None);
     }
 }

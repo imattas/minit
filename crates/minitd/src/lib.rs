@@ -3,6 +3,7 @@ pub mod control;
 pub mod early_mounts;
 pub mod reaper;
 pub mod rescue;
+pub mod runtime;
 pub mod shutdown;
 
 pub fn version() -> &'static str {
