@@ -95,7 +95,13 @@ impl<R: ControlRuntime> ControlService<R> {
                     message: error.to_string(),
                 },
             },
-            ControlRequest::Start { unit } => match self.runtime.start(&mut self.services, &unit) {
+            ControlRequest::Explain { unit } => match self.services.explain(&unit) {
+                Ok(lines) => ControlResponse::Explanation { unit, lines },
+                Err(error) => ControlResponse::Error {
+                    message: error.to_string(),
+                },
+            },
+            ControlRequest::Start { unit } => match self.start_unit_or_target(&unit) {
                 Ok(message) => ControlResponse::Accepted { message },
                 Err(message) => ControlResponse::Error { message },
             },
@@ -115,11 +121,46 @@ impl<R: ControlRuntime> ControlService<R> {
     pub fn shutdown(&mut self) -> Result<(), String> {
         self.runtime.shutdown(&mut self.services)
     }
+
+    fn start_unit_or_target(&mut self, unit: &str) -> Result<String, String> {
+        if self
+            .services
+            .is_target(unit)
+            .map_err(|err| err.to_string())?
+        {
+            let batches = self
+                .services
+                .plan_start_batches(unit)
+                .map_err(|err| err.to_string())?;
+            for batch in batches {
+                for graph_unit in batch {
+                    if self
+                        .services
+                        .is_service(&graph_unit)
+                        .map_err(|err| err.to_string())?
+                    {
+                        self.runtime.start(&mut self.services, &graph_unit)?;
+                    } else {
+                        self.services
+                            .mark_active_without_pid(&graph_unit)
+                            .map_err(|err| err.to_string())?;
+                    }
+                }
+            }
+            Ok(format!("started target {unit}"))
+        } else {
+            self.runtime.start(&mut self.services, unit)
+        }
+    }
 }
 
 pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
     match request {
         ControlRequest::Status { .. } => ControlResponse::Status { units: Vec::new() },
+        ControlRequest::Explain { unit } => ControlResponse::Explanation {
+            unit,
+            lines: Vec::new(),
+        },
         ControlRequest::Start { unit } => not_implemented("start", &unit),
         ControlRequest::Stop { unit } => not_implemented("stop", &unit),
         ControlRequest::Restart { unit } => not_implemented("restart", &unit),
@@ -423,6 +464,103 @@ start = ["/usr/bin/sshd", "-D"]
             response,
             ControlResponse::Accepted {
                 message: "started sshd.service as pid 123".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn control_service_start_target_starts_graph_services_and_marks_target_active() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+wants = ["sshd.service"]
+"#,
+        )
+        .unwrap();
+        let mut services = service_manager_with_sshd();
+        services.add_unit(target).unwrap();
+        let mut service = ControlService::with_runtime(services, FakeRuntime::default());
+
+        let response = service.handle_request(ControlRequest::Start {
+            unit: "multi-user.target".to_string(),
+        });
+        let target_status = service.handle_request(ControlRequest::Status {
+            unit: Some("multi-user.target".to_string()),
+        });
+        let sshd_status = service.handle_request(ControlRequest::Status {
+            unit: Some("sshd.service".to_string()),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Accepted {
+                message: "started target multi-user.target".to_string(),
+            }
+        );
+        assert_eq!(
+            target_status,
+            ControlResponse::Status {
+                units: vec![minit_core::ipc::UnitStatus {
+                    unit: "multi-user.target".to_string(),
+                    state: UnitState::Active,
+                    main_pid: None,
+                    description: None,
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
+                }]
+            }
+        );
+        assert_eq!(
+            sshd_status,
+            ControlResponse::Status {
+                units: vec![minit_core::ipc::UnitStatus {
+                    unit: "sshd.service".to_string(),
+                    state: UnitState::Active,
+                    main_pid: Some(123),
+                    description: Some("OpenSSH daemon".to_string()),
+                    restart_attempts: 0,
+                    last_exit_status: None,
+                    cgroup_path: None,
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn control_service_explains_target_dependencies() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+wants = ["sshd.service"]
+"#,
+        )
+        .unwrap();
+        let mut services = service_manager_with_sshd();
+        services.add_unit(target).unwrap();
+        let mut service = ControlService::new(services);
+
+        let response = service.handle_request(ControlRequest::Explain {
+            unit: "multi-user.target".to_string(),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Explanation {
+                unit: "multi-user.target".to_string(),
+                lines: vec![
+                    "kind: target".to_string(),
+                    "state: inactive".to_string(),
+                    "wants: sshd.service".to_string(),
+                ],
             }
         );
     }

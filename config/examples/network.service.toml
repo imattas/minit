@@ -1,0 +1,9 @@
+[unit]
+name = "network.service"
+description = "VM smoke network prerequisite"
+
+[exec]
+start = ["/bin/sh", "-c", "while true; do /bin/sleep 60; done"]
+
+[restart]
+policy = "never"

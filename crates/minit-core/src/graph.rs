@@ -32,6 +32,10 @@ impl DependencyGraph {
     }
 
     pub fn start_order(&self, targets: &[String]) -> Result<Vec<String>, GraphError> {
+        Ok(self.start_batches(targets)?.into_iter().flatten().collect())
+    }
+
+    pub fn start_batches(&self, targets: &[String]) -> Result<Vec<Vec<String>>, GraphError> {
         let mut included = BTreeSet::new();
         for target in targets {
             self.collect_start_set(target, &mut included)?;
@@ -45,7 +49,33 @@ impl DependencyGraph {
             self.visit(unit, &included, &mut visiting, &mut visited, &mut order)?;
         }
 
-        Ok(order)
+        let mut remaining = order.into_iter().collect::<BTreeSet<_>>();
+        let mut batches = Vec::new();
+        while !remaining.is_empty() {
+            let batch = remaining
+                .iter()
+                .filter(|unit| {
+                    self.ordering_dependencies(unit, &included)
+                        .map(|dependencies| {
+                            dependencies
+                                .into_iter()
+                                .all(|dependency| !remaining.contains(&dependency))
+                        })
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+
+            if batch.is_empty() {
+                return Err(GraphError::Cycle(remaining.into_iter().collect()));
+            }
+            for unit in &batch {
+                remaining.remove(unit);
+            }
+            batches.push(batch);
+        }
+
+        Ok(batches)
     }
 
     fn collect_start_set(
@@ -112,6 +142,17 @@ impl DependencyGraph {
             .ok_or_else(|| GraphError::UnknownUnit(unit.to_string()))?;
 
         let mut dependencies = BTreeSet::new();
+        for dependency in definition
+            .dependencies
+            .requires
+            .iter()
+            .chain(definition.dependencies.wants.iter())
+        {
+            if included.contains(dependency) {
+                dependencies.insert(dependency.clone());
+            }
+        }
+
         for after in &definition.dependencies.after {
             if included.contains(after) {
                 dependencies.insert(after.clone());
@@ -251,5 +292,49 @@ after = ["a"]
         let error = graph.start_order(&["missing".to_string()]).unwrap_err();
 
         assert_eq!(error, GraphError::UnknownUnit("missing".to_string()));
+    }
+
+    #[test]
+    fn start_batches_group_independent_units_before_dependents() {
+        let mut graph = DependencyGraph::new();
+        graph.add_unit(unit("network.service", "")).unwrap();
+        graph.add_unit(unit("logger.service", "")).unwrap();
+        graph
+            .add_unit(
+                parse_unit_toml(
+                    r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+wants = ["network.service", "logger.service", "app.service"]
+"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        graph
+            .add_unit(unit(
+                "app.service",
+                r#"
+[dependencies]
+after = ["network.service", "logger.service"]
+"#,
+            ))
+            .unwrap();
+
+        let batches = graph
+            .start_batches(&["multi-user.target".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            batches,
+            vec![
+                vec!["logger.service".to_string(), "network.service".to_string()],
+                vec!["app.service".to_string()],
+                vec!["multi-user.target".to_string()],
+            ]
+        );
     }
 }

@@ -7,6 +7,7 @@ pub const DEFAULT_CONTROL_SOCKET: &str = "/run/minit/minitd.sock";
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlRequest {
     Status { unit: Option<String> },
+    Explain { unit: String },
     Start { unit: String },
     Stop { unit: String },
     Restart { unit: String },
@@ -38,6 +39,7 @@ pub struct UnitStatus {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlResponse {
     Status { units: Vec<UnitStatus> },
+    Explanation { unit: String, lines: Vec<String> },
     Accepted { message: String },
     Error { message: String },
 }

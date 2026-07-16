@@ -1,0 +1,7 @@
+[unit]
+name = "multi-user.target"
+kind = "target"
+description = "VM smoke multi-unit boot target"
+
+[dependencies]
+wants = ["network.service", "demo-sleep"]

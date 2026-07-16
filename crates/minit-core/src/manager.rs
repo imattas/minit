@@ -1,3 +1,4 @@
+use crate::graph::{DependencyGraph, GraphError};
 use crate::ipc::{UnitState, UnitStatus};
 use crate::unit::{RestartPolicy, UnitDefinition, UnitValidationError};
 use std::collections::{BTreeMap, VecDeque};
@@ -53,6 +54,8 @@ pub enum ServiceManagerError {
     UnknownUnit(String),
     #[error("invalid unit: {0}")]
     InvalidUnit(#[from] UnitValidationError),
+    #[error("dependency graph error: {0}")]
+    Graph(#[from] GraphError),
 }
 
 impl ServiceManager {
@@ -95,10 +98,71 @@ impl ServiceManager {
     pub fn active_unit_names(&self) -> Vec<String> {
         self.units
             .iter()
-            .filter(|(_, record)| record.state == UnitState::Active)
+            .filter(|(_, record)| {
+                record.state == UnitState::Active && record.definition.is_service()
+            })
             .map(|(name, _)| name.clone())
             .rev()
             .collect()
+    }
+
+    pub fn plan_start_graph(&self, unit: &str) -> Result<Vec<String>, ServiceManagerError> {
+        Ok(self
+            .plan_start_batches(unit)?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
+    pub fn plan_start_batches(&self, unit: &str) -> Result<Vec<Vec<String>>, ServiceManagerError> {
+        let mut graph = DependencyGraph::new();
+        for record in self.units.values() {
+            graph.add_unit(record.definition.clone())?;
+        }
+        graph
+            .start_batches(&[unit.to_string()])
+            .map_err(ServiceManagerError::from)
+    }
+
+    pub fn is_service(&self, unit: &str) -> Result<bool, ServiceManagerError> {
+        Ok(self.record(unit)?.definition.is_service())
+    }
+
+    pub fn is_target(&self, unit: &str) -> Result<bool, ServiceManagerError> {
+        Ok(self.record(unit)?.definition.is_target())
+    }
+
+    pub fn explain(&self, unit: &str) -> Result<Vec<String>, ServiceManagerError> {
+        let record = self.record(unit)?;
+        let mut lines = vec![
+            format!("kind: {}", record.definition.unit.kind),
+            format!("state: {:?}", record.state).to_lowercase(),
+        ];
+        if !record.definition.dependencies.requires.is_empty() {
+            lines.push(format!(
+                "requires: {}",
+                record.definition.dependencies.requires.join(", ")
+            ));
+        }
+        if !record.definition.dependencies.wants.is_empty() {
+            lines.push(format!(
+                "wants: {}",
+                record.definition.dependencies.wants.join(", ")
+            ));
+        }
+        if !record.definition.dependencies.after.is_empty() {
+            lines.push(format!(
+                "after: {}",
+                record.definition.dependencies.after.join(", ")
+            ));
+        }
+        if !record.definition.dependencies.before.is_empty() {
+            lines.push(format!(
+                "before: {}",
+                record.definition.dependencies.before.join(", ")
+            ));
+        }
+        Ok(lines)
     }
 
     pub fn plan_start(&mut self, unit: &str) -> Result<StartPlan, ServiceManagerError> {
@@ -133,6 +197,13 @@ impl ServiceManager {
         let record = self.record_mut(unit)?;
         record.state = UnitState::Active;
         record.main_pid = Some(main_pid);
+        Ok(())
+    }
+
+    pub fn mark_active_without_pid(&mut self, unit: &str) -> Result<(), ServiceManagerError> {
+        let record = self.record_mut(unit)?;
+        record.state = UnitState::Active;
+        record.main_pid = None;
         Ok(())
     }
 
@@ -424,6 +495,63 @@ stop_timeout = "2s"
         assert_eq!(
             manager.stop_timeout("slow-stop").unwrap(),
             Duration::from_secs(2)
+        );
+    }
+
+    #[test]
+    fn plan_target_start_returns_dependency_services_in_graph_order() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+wants = ["network.service", "getty.service"]
+"#,
+        )
+        .unwrap();
+        let network = parse_unit_toml(
+            r#"
+[unit]
+name = "network.service"
+
+[exec]
+start = ["/bin/network"]
+"#,
+        )
+        .unwrap();
+        let getty = parse_unit_toml(
+            r#"
+[unit]
+name = "getty.service"
+
+[exec]
+start = ["/sbin/getty"]
+
+[dependencies]
+after = ["network.service"]
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(target).unwrap();
+        manager.add_unit(getty).unwrap();
+        manager.add_unit(network).unwrap();
+
+        let plan = manager.plan_start_graph("multi-user.target").unwrap();
+
+        assert_eq!(
+            plan,
+            vec![
+                "network.service".to_string(),
+                "getty.service".to_string(),
+                "multi-user.target".to_string(),
+            ]
+        );
+        assert_eq!(
+            manager.plan_start("network.service").unwrap().argv,
+            vec!["/bin/network"]
         );
     }
 

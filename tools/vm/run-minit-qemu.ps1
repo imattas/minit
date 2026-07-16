@@ -13,6 +13,7 @@ param(
     [string]$ExpectShutdownStopUnit,
     [string]$ExpectStuckStopUnit,
     [string]$ExpectShutdownStuckUnit,
+    [string]$ExpectBootTarget,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -51,12 +52,15 @@ if ($ExpectStuckStopUnit) {
 if ($ExpectShutdownStuckUnit) {
     $append = "$append minit.smoke_shutdown_stuck=$ExpectShutdownStuckUnit"
 }
+if ($ExpectBootTarget) {
+    $append = "$append minit.smoke_boot_target=$ExpectBootTarget"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -148,6 +152,12 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectBootTarget) {
+                if ($output.Contains("accepted: started target $ExpectBootTarget") -and $output.Contains("unit: $ExpectBootTarget") -and $output.Contains("unit: network.service") -and $output.Contains("unit: demo-sleep") -and $output.Contains("state: active")) {
+                    Write-Output "Detected multi-unit boot target start for $ExpectBootTarget; VM boot-target smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -230,6 +240,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected shutdown escalation for $ExpectShutdownStuckUnit was detected."
+        exit 5
+    }
+    if ($ExpectBootTarget) {
+        if ($output.Contains("accepted: started target $ExpectBootTarget") -and $output.Contains("unit: $ExpectBootTarget") -and $output.Contains("unit: network.service") -and $output.Contains("unit: demo-sleep") -and $output.Contains("state: active")) {
+            Write-Output "Detected multi-unit boot target start for $ExpectBootTarget; VM boot-target smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected boot target proof for $ExpectBootTarget was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {

@@ -5,6 +5,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UnitDefinition {
     pub unit: UnitSection,
+    #[serde(default)]
     pub exec: ExecSection,
     #[serde(default)]
     pub dependencies: DependencySection,
@@ -25,20 +26,36 @@ impl UnitDefinition {
             });
         }
 
-        let Some(program) = self.exec.start.first() else {
-            return Err(UnitValidationError::EmptyField {
-                field: "exec.start",
-            });
-        };
-
-        if !program.starts_with('/') {
-            return Err(UnitValidationError::NonAbsolutePath {
-                field: "exec.start[0]",
-                value: program.clone(),
+        if !self.is_service() && !self.is_target() {
+            return Err(UnitValidationError::UnsupportedUnitKind {
+                value: self.unit.kind.clone(),
             });
         }
 
+        if self.is_service() {
+            let Some(program) = self.exec.start.first() else {
+                return Err(UnitValidationError::EmptyField {
+                    field: "exec.start",
+                });
+            };
+
+            if !program.starts_with('/') {
+                return Err(UnitValidationError::NonAbsolutePath {
+                    field: "exec.start[0]",
+                    value: program.clone(),
+                });
+            }
+        }
+
         Ok(())
+    }
+
+    pub fn is_service(&self) -> bool {
+        self.unit.kind == "service"
+    }
+
+    pub fn is_target(&self) -> bool {
+        self.unit.kind == "target"
     }
 }
 
@@ -55,8 +72,9 @@ fn default_unit_kind() -> String {
     "service".to_string()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct ExecSection {
+    #[serde(default)]
     pub start: Vec<String>,
     #[serde(default)]
     pub reload: Vec<String>,
@@ -206,6 +224,8 @@ pub enum UnitValidationError {
     NonAbsolutePath { field: &'static str, value: String },
     #[error("unit.name contains unsafe path characters: {value}")]
     UnsafeUnitName { value: String },
+    #[error("unsupported unit kind: {value}")]
+    UnsupportedUnitKind { value: String },
 }
 
 impl UnitValidationError {
@@ -214,6 +234,7 @@ impl UnitValidationError {
             Self::EmptyField { field } => field,
             Self::NonAbsolutePath { field, .. } => field,
             Self::UnsafeUnitName { .. } => "unit.name",
+            Self::UnsupportedUnitKind { .. } => "unit.kind",
         }
     }
 }
@@ -289,6 +310,27 @@ environment = ["RUST_LOG=info"]
     }
 
     #[test]
+    fn target_units_parse_without_exec_section() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+description = "Normal multi-user boot target"
+
+[dependencies]
+wants = ["getty.service"]
+"#,
+        )
+        .expect("target unit should parse without exec");
+
+        unit.validate().expect("target unit should validate");
+        assert!(unit.is_target());
+        assert!(!unit.is_service());
+        assert_eq!(unit.dependencies.wants, vec!["getty.service"]);
+    }
+
+    #[test]
     fn restart_policy_defaults_to_never() {
         let unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
 
@@ -358,6 +400,6 @@ environment = ["RUST_LOG=info"]
             parsed += 1;
         }
 
-        assert_eq!(parsed, 6);
+        assert_eq!(parsed, 8);
     }
 }

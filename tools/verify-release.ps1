@@ -74,6 +74,14 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectShutdownStopUnit demo-sleep `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm boot target smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectBootTarget multi-user.target `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm stuck stop escalation smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

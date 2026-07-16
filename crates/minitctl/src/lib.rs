@@ -17,6 +17,7 @@ pub struct Cli {
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
     Status { unit: Option<String> },
+    Explain { unit: String },
     Start { unit: String },
     Stop { unit: String },
     Restart { unit: String },
@@ -164,6 +165,7 @@ impl ControlTransport for UnavailableTransport {
 pub fn command_to_request(command: Command) -> ControlRequest {
     match command {
         Command::Status { unit } => ControlRequest::Status { unit },
+        Command::Explain { unit } => ControlRequest::Explain { unit },
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
         Command::Restart { unit } => ControlRequest::Restart { unit },
@@ -197,6 +199,13 @@ pub fn render_response(response: &ControlResponse) -> String {
                 if let Some(cgroup_path) = &unit.cgroup_path {
                     output.push_str(&format!("cgroup_path: {cgroup_path}\n"));
                 }
+            }
+            output
+        }
+        ControlResponse::Explanation { unit, lines } => {
+            let mut output = format!("unit: {unit}\n");
+            for line in lines {
+                output.push_str(&format!("explain: {line}\n"));
             }
             output
         }
@@ -272,6 +281,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_explain_command() {
+        let cli = Cli::parse_from(["minitctl", "explain", "multi-user.target"]);
+
+        assert_eq!(
+            cli.command,
+            Command::Explain {
+                unit: "multi-user.target".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn parses_lifecycle_commands() {
         assert_eq!(
             Cli::parse_from(["minitctl", "start", "sshd"]).command,
@@ -327,6 +348,14 @@ mod tests {
                 unit: "sshd".to_string()
             }
         );
+        assert_eq!(
+            command_to_request(Command::Explain {
+                unit: "sshd".to_string()
+            }),
+            ControlRequest::Explain {
+                unit: "sshd".to_string()
+            }
+        );
     }
 
     #[test]
@@ -364,6 +393,23 @@ mod tests {
             render_response(&response),
             "accepted: queued restart for sshd\n"
         );
+    }
+
+    #[test]
+    fn renders_explanation_response() {
+        let response = ControlResponse::Explanation {
+            unit: "multi-user.target".to_string(),
+            lines: vec![
+                "kind: target".to_string(),
+                "wants: getty.service".to_string(),
+            ],
+        };
+
+        let output = render_response(&response);
+
+        assert!(output.contains("unit: multi-user.target"));
+        assert!(output.contains("explain: kind: target"));
+        assert!(output.contains("explain: wants: getty.service"));
     }
 
     #[test]
