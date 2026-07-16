@@ -5,6 +5,29 @@ pub mod reaper;
 pub mod rescue;
 pub mod runtime;
 pub mod shutdown;
+pub mod units;
+
+use std::path::PathBuf;
+
+pub const DEFAULT_UNIT_DIR: &str = "/etc/minit/services";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NormalConfig {
+    pub unit_dir: PathBuf,
+    pub socket: control::ControlSocketConfig,
+}
+
+impl Default for NormalConfig {
+    fn default() -> Self {
+        Self {
+            unit_dir: PathBuf::from(DEFAULT_UNIT_DIR),
+            socket: control::ControlSocketConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigError(pub String);
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -28,8 +51,15 @@ where
         return run_rescue_entrypoint();
     }
 
-    if should_enter_normal(args, is_pid_one, &kernel_cmdline) {
-        return run_normal_entrypoint();
+    if should_enter_normal(args.clone(), is_pid_one, &kernel_cmdline) {
+        let config = match normal_config_from_args(args) {
+            Ok(config) => config,
+            Err(error) => {
+                eprintln!("minitd: {error}", error = error.0);
+                return 2;
+            }
+        };
+        return run_normal_entrypoint(config);
     }
 
     0
@@ -56,7 +86,8 @@ where
             .split_whitespace()
             .any(|arg| arg == "minit.rescue=1");
 
-    explicit_rescue || (is_pid_one && !is_normal_requested(args))
+    explicit_rescue
+        || (is_pid_one && !is_normal_requested(args) && !kernel_requests_normal(kernel_cmdline))
 }
 
 pub fn should_enter_normal<I, S>(args: I, is_pid_one: bool, kernel_cmdline: &str) -> bool
@@ -69,7 +100,7 @@ where
         && !kernel_cmdline
             .split_whitespace()
             .any(|arg| arg == "minit.rescue=1")
-        && (is_pid_one || is_normal_requested(args))
+        && (is_pid_one || is_normal_requested(args) || kernel_requests_normal(kernel_cmdline))
 }
 
 fn is_normal_requested<I, S>(args: I) -> bool
@@ -80,6 +111,54 @@ where
     args.into_iter()
         .map(Into::into)
         .any(|arg| arg == "--normal")
+}
+
+fn kernel_requests_normal(kernel_cmdline: &str) -> bool {
+    kernel_cmdline
+        .split_whitespace()
+        .any(|arg| arg == "minit.normal=1")
+}
+
+pub fn normal_config_from_args<I, S>(args: I) -> Result<NormalConfig, ConfigError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut config = NormalConfig::default();
+    let args: Vec<String> = args.into_iter().map(Into::into).collect();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--unit-dir" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(ConfigError("--unit-dir requires a path".to_string()));
+                };
+                config.unit_dir = PathBuf::from(value);
+            }
+            "--control-socket" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(ConfigError("--control-socket requires a path".to_string()));
+                };
+                config.socket.socket_path = PathBuf::from(value);
+            }
+            "--max-requests" => {
+                index += 1;
+                let Some(value) = args.get(index) else {
+                    return Err(ConfigError("--max-requests requires a number".to_string()));
+                };
+                config.socket.max_requests = Some(
+                    value
+                        .parse()
+                        .map_err(|_| ConfigError("--max-requests must be a number".to_string()))?,
+                );
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    Ok(config)
 }
 
 fn current_process_is_pid_one() -> bool {
@@ -110,14 +189,27 @@ fn run_rescue_entrypoint() -> i32 {
     }
 }
 
-pub fn run_normal_entrypoint() -> i32 {
+pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
     #[cfg(target_os = "linux")]
     {
-        use minit_core::manager::ServiceManager;
-
-        let mut service = control::ControlService::new(ServiceManager::new());
-        let config = control::ControlSocketConfig::default();
-        match control::run_control_socket_once(&config, &mut service) {
+        let services = if config.unit_dir.exists() {
+            match units::load_units_from_dir(&config.unit_dir) {
+                Ok(services) => services,
+                Err(error) => {
+                    eprintln!("minitd: failed to load units: {error}");
+                    return 1;
+                }
+            }
+        } else {
+            minit_core::manager::ServiceManager::new()
+        };
+        let runtime = runtime::ServiceRuntime::new(
+            cgroups::CgroupManager::new(cgroups::DEFAULT_CGROUP_ROOT),
+            cgroups::LinuxCgroupFs,
+            runtime::CommandSpawner,
+        );
+        let mut service = control::ControlService::with_runtime(services, runtime);
+        match control::run_control_socket(&config.socket, &mut service) {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("minitd: control socket failed: {error}");
@@ -128,6 +220,7 @@ pub fn run_normal_entrypoint() -> i32 {
 
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = config;
         0
     }
 }
@@ -189,5 +282,44 @@ mod tests {
             true,
             "console=ttyS0"
         ));
+    }
+
+    #[test]
+    fn kernel_cmdline_can_select_normal_mode() {
+        assert!(crate::should_enter_normal(
+            ["/init"],
+            true,
+            "console=ttyS0 minit.normal=1"
+        ));
+        assert!(!crate::should_enter_rescue(
+            ["/init"],
+            true,
+            "console=ttyS0 minit.normal=1"
+        ));
+    }
+
+    #[test]
+    fn normal_config_parses_unit_dir_and_socket_path() {
+        let config = crate::normal_config_from_args([
+            "minitd",
+            "--normal",
+            "--unit-dir",
+            "/tmp/minit-units",
+            "--control-socket",
+            "/tmp/minit.sock",
+            "--max-requests",
+            "2",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            config.unit_dir,
+            std::path::PathBuf::from("/tmp/minit-units")
+        );
+        assert_eq!(
+            config.socket.socket_path,
+            std::path::PathBuf::from("/tmp/minit.sock")
+        );
+        assert_eq!(config.socket.max_requests, Some(2));
     }
 }

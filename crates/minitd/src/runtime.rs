@@ -1,4 +1,5 @@
 use crate::cgroups::{CgroupError, CgroupFs, CgroupManager};
+use crate::control::ControlRuntime;
 use minit_core::manager::{ServiceManager, ServiceManagerError};
 use thiserror::Error;
 
@@ -53,6 +54,60 @@ where
 
     services.mark_active(unit, pid)?;
     Ok(pid)
+}
+
+pub fn stop_service<F>(
+    services: &mut ServiceManager,
+    cgroups: &CgroupManager,
+    cgroup_fs: &mut F,
+    unit: &str,
+) -> Result<(), RuntimeError>
+where
+    F: CgroupFs,
+{
+    cgroups.kill_unit(cgroup_fs, unit)?;
+    services.mark_inactive(unit)?;
+    Ok(())
+}
+
+pub struct ServiceRuntime<F, P> {
+    cgroups: CgroupManager,
+    cgroup_fs: F,
+    spawner: P,
+}
+
+impl<F, P> ServiceRuntime<F, P> {
+    pub fn new(cgroups: CgroupManager, cgroup_fs: F, spawner: P) -> Self {
+        Self {
+            cgroups,
+            cgroup_fs,
+            spawner,
+        }
+    }
+}
+
+impl<F, P> ControlRuntime for ServiceRuntime<F, P>
+where
+    F: CgroupFs,
+    P: ProcessSpawner,
+{
+    fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+        let pid = start_service(
+            services,
+            &self.cgroups,
+            &mut self.cgroup_fs,
+            &mut self.spawner,
+            unit,
+        )
+        .map_err(|err| err.to_string())?;
+        Ok(format!("started {unit} as pid {pid}"))
+    }
+
+    fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+        stop_service(services, &self.cgroups, &mut self.cgroup_fs, unit)
+            .map_err(|err| err.to_string())?;
+        Ok(format!("stopped {unit}"))
+    }
 }
 
 pub struct CommandSpawner;
@@ -160,5 +215,26 @@ start = ["/usr/bin/sshd", "-D"]
         let status = services.status(Some("sshd.service")).unwrap();
         assert_eq!(status[0].state, UnitState::Active);
         assert_eq!(status[0].main_pid, Some(321));
+    }
+
+    #[test]
+    fn stop_service_kills_cgroup_and_marks_inactive() {
+        let mut services = manager_with_sshd();
+        services.plan_start("sshd.service").unwrap();
+        services.mark_active("sshd.service", 321).unwrap();
+        let cgroups = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut cgroup_fs = FakeCgroupFs::default();
+
+        stop_service(&mut services, &cgroups, &mut cgroup_fs, "sshd.service").unwrap();
+
+        assert_eq!(
+            cgroup_fs
+                .writes
+                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")),
+            Some(&"1\n".to_string())
+        );
+        let status = services.status(Some("sshd.service")).unwrap();
+        assert_eq!(status[0].state, UnitState::Inactive);
+        assert_eq!(status[0].main_pid, None);
     }
 }

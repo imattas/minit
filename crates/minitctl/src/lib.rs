@@ -7,6 +7,9 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(name = "minitctl")]
 pub struct Cli {
+    #[arg(long, global = true)]
+    pub socket: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
 }
@@ -44,17 +47,23 @@ where
 }
 
 pub fn run_cli(cli: Cli) -> i32 {
+    let socket = control_socket_for_cli(&cli).to_string();
+
     #[cfg(target_os = "linux")]
     {
-        let mut transport = UnixSocketTransport::new(DEFAULT_CONTROL_SOCKET);
+        let mut transport = UnixSocketTransport::new(socket);
         run_with_transport(cli, &mut transport)
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        let mut transport = UnavailableTransport::new(DEFAULT_CONTROL_SOCKET);
+        let mut transport = UnavailableTransport::new(socket);
         run_with_transport(cli, &mut transport)
     }
+}
+
+pub fn control_socket_for_cli(cli: &Cli) -> &str {
+    cli.socket.as_deref().unwrap_or(DEFAULT_CONTROL_SOCKET)
 }
 
 pub fn run_with_transport<T: ControlTransport>(cli: Cli, transport: &mut T) -> i32 {
@@ -226,6 +235,21 @@ mod tests {
         let cli = Cli::parse_from(["minitctl", "status"]);
 
         assert_eq!(cli.command, Command::Status { unit: None });
+    }
+
+    #[test]
+    fn parses_socket_override() {
+        let cli = Cli::parse_from(["minitctl", "--socket", "/tmp/minit.sock", "status"]);
+
+        assert_eq!(cli.socket.as_deref(), Some("/tmp/minit.sock"));
+        assert_eq!(cli.command, Command::Status { unit: None });
+    }
+
+    #[test]
+    fn socket_override_replaces_default_control_socket() {
+        let cli = Cli::parse_from(["minitctl", "--socket", "/tmp/minit.sock", "status"]);
+
+        assert_eq!(control_socket_for_cli(&cli), "/tmp/minit.sock");
     }
 
     #[test]

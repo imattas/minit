@@ -20,23 +20,57 @@ pub enum ControlError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControlSocketConfig {
     pub socket_path: PathBuf,
+    pub max_requests: Option<usize>,
 }
 
 impl Default for ControlSocketConfig {
     fn default() -> Self {
         Self {
             socket_path: PathBuf::from(DEFAULT_CONTROL_SOCKET),
+            max_requests: None,
         }
     }
 }
 
-pub struct ControlService {
-    services: ServiceManager,
+pub trait ControlRuntime {
+    fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String>;
+    fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String>;
+
+    fn restart(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+        self.stop(services, unit)?;
+        self.start(services, unit)
+    }
 }
 
-impl ControlService {
+pub struct DisabledRuntime;
+
+impl ControlRuntime for DisabledRuntime {
+    fn start(&mut self, _services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+        Err(format!("start is not implemented yet for {unit}"))
+    }
+
+    fn stop(&mut self, _services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+        Err(format!("stop is not implemented yet for {unit}"))
+    }
+}
+
+pub struct ControlService<R = DisabledRuntime> {
+    services: ServiceManager,
+    runtime: R,
+}
+
+impl ControlService<DisabledRuntime> {
     pub fn new(services: ServiceManager) -> Self {
-        Self { services }
+        Self {
+            services,
+            runtime: DisabledRuntime,
+        }
+    }
+}
+
+impl<R: ControlRuntime> ControlService<R> {
+    pub fn with_runtime(services: ServiceManager, runtime: R) -> Self {
+        Self { services, runtime }
     }
 
     pub fn handle_request(&mut self, request: ControlRequest) -> ControlResponse {
@@ -47,9 +81,20 @@ impl ControlService {
                     message: error.to_string(),
                 },
             },
-            ControlRequest::Start { unit } => not_implemented("start", &unit),
-            ControlRequest::Stop { unit } => not_implemented("stop", &unit),
-            ControlRequest::Restart { unit } => not_implemented("restart", &unit),
+            ControlRequest::Start { unit } => match self.runtime.start(&mut self.services, &unit) {
+                Ok(message) => ControlResponse::Accepted { message },
+                Err(message) => ControlResponse::Error { message },
+            },
+            ControlRequest::Stop { unit } => match self.runtime.stop(&mut self.services, &unit) {
+                Ok(message) => ControlResponse::Accepted { message },
+                Err(message) => ControlResponse::Error { message },
+            },
+            ControlRequest::Restart { unit } => {
+                match self.runtime.restart(&mut self.services, &unit) {
+                    Ok(message) => ControlResponse::Accepted { message },
+                    Err(message) => ControlResponse::Error { message },
+                }
+            }
         }
     }
 }
@@ -70,7 +115,7 @@ pub fn handle_control_line(line: &str) -> Result<String, ControlError> {
 }
 
 pub fn handle_control_line_with_service(
-    service: &mut ControlService,
+    service: &mut ControlService<impl ControlRuntime>,
     line: &str,
 ) -> Result<String, ControlError> {
     let request = decode_request(line)?;
@@ -92,7 +137,7 @@ where
 }
 
 pub fn handle_control_io_with_service<R, W>(
-    service: &mut ControlService,
+    service: &mut ControlService<impl ControlRuntime>,
     reader: &mut R,
     writer: &mut W,
 ) -> Result<(), ControlError>
@@ -111,7 +156,17 @@ where
 #[cfg(target_os = "linux")]
 pub fn run_control_socket_once(
     config: &ControlSocketConfig,
-    service: &mut ControlService,
+    service: &mut ControlService<impl ControlRuntime>,
+) -> Result<(), ControlError> {
+    let mut one_request = config.clone();
+    one_request.max_requests = Some(1);
+    run_control_socket(&one_request, service)
+}
+
+#[cfg(target_os = "linux")]
+pub fn run_control_socket(
+    config: &ControlSocketConfig,
+    service: &mut ControlService<impl ControlRuntime>,
 ) -> Result<(), ControlError> {
     use std::io::BufReader;
     use std::os::unix::net::UnixListener;
@@ -124,10 +179,16 @@ pub fn run_control_socket_once(
     }
 
     let listener = UnixListener::bind(&config.socket_path)?;
-    let (stream, _) = listener.accept()?;
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut writer = stream;
-    handle_control_io_with_service(service, &mut reader, &mut writer)
+    for stream in listener
+        .incoming()
+        .take(config.max_requests.unwrap_or(usize::MAX))
+    {
+        let stream = stream?;
+        let mut reader = BufReader::new(stream.try_clone()?);
+        let mut writer = stream;
+        handle_control_io_with_service(service, &mut reader, &mut writer)?;
+    }
+    Ok(())
 }
 
 fn not_implemented(command: &str, unit: &str) -> ControlResponse {
@@ -252,6 +313,77 @@ start = ["/usr/bin/sshd", "-D"]
         );
     }
 
+    #[derive(Default)]
+    struct FakeRuntime {
+        calls: Vec<String>,
+    }
+
+    impl ControlRuntime for FakeRuntime {
+        fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+            self.calls.push(format!("start:{unit}"));
+            services
+                .mark_active(unit, 123)
+                .map_err(|err| err.to_string())?;
+            Ok(format!("started {unit} as pid 123"))
+        }
+
+        fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+            self.calls.push(format!("stop:{unit}"));
+            services
+                .mark_inactive(unit)
+                .map_err(|err| err.to_string())?;
+            Ok(format!("stopped {unit}"))
+        }
+    }
+
+    #[test]
+    fn control_service_start_uses_runtime_and_updates_status() {
+        let mut service =
+            ControlService::with_runtime(service_manager_with_sshd(), FakeRuntime::default());
+
+        let response = service.handle_request(ControlRequest::Start {
+            unit: "sshd.service".to_string(),
+        });
+        let status = service.handle_request(ControlRequest::Status {
+            unit: Some("sshd.service".to_string()),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Accepted {
+                message: "started sshd.service as pid 123".to_string(),
+            }
+        );
+        assert_eq!(
+            status,
+            ControlResponse::Status {
+                units: vec![minit_core::ipc::UnitStatus {
+                    unit: "sshd.service".to_string(),
+                    state: UnitState::Active,
+                    main_pid: Some(123),
+                    description: Some("OpenSSH daemon".to_string()),
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn control_service_restart_stops_then_starts_unit() {
+        let mut service =
+            ControlService::with_runtime(service_manager_with_sshd(), FakeRuntime::default());
+
+        let response = service.handle_request(ControlRequest::Restart {
+            unit: "sshd.service".to_string(),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Accepted {
+                message: "started sshd.service as pid 123".to_string(),
+            }
+        );
+    }
+
     #[test]
     fn control_socket_config_uses_default_socket() {
         let config = ControlSocketConfig::default();
@@ -260,5 +392,6 @@ start = ["/usr/bin/sshd", "-D"]
             config.socket_path,
             std::path::PathBuf::from(minit_core::ipc::DEFAULT_CONTROL_SOCKET)
         );
+        assert_eq!(config.max_requests, None);
     }
 }
