@@ -7,6 +7,8 @@ use thiserror::Error;
 pub struct StartPlan {
     pub unit: String,
     pub argv: Vec<String>,
+    pub working_directory: Option<String>,
+    pub no_new_privileges: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,6 +105,8 @@ impl ServiceManager {
         Ok(StartPlan {
             unit: unit.to_string(),
             argv: record.definition.exec.start.clone(),
+            working_directory: record.definition.exec.working_directory.clone(),
+            no_new_privileges: record.definition.security.no_new_privileges,
         })
     }
 
@@ -252,6 +256,8 @@ start = ["/usr/bin/sshd", "-D"]
 
         assert_eq!(plan.unit, "sshd");
         assert_eq!(plan.argv, vec!["/usr/bin/sshd", "-D"]);
+        assert_eq!(plan.working_directory, None);
+        assert!(!plan.no_new_privileges);
         assert_eq!(statuses[0].state, UnitState::Starting);
     }
 

@@ -18,6 +18,11 @@ impl UnitDefinition {
         if self.unit.name.trim().is_empty() {
             return Err(UnitValidationError::EmptyField { field: "unit.name" });
         }
+        if !is_safe_unit_name(&self.unit.name) {
+            return Err(UnitValidationError::UnsafeUnitName {
+                value: self.unit.name.clone(),
+            });
+        }
 
         let Some(program) = self.exec.start.first() else {
             return Err(UnitValidationError::EmptyField {
@@ -138,6 +143,8 @@ pub enum UnitValidationError {
     EmptyField { field: &'static str },
     #[error("{field} must be an absolute path, got {value}")]
     NonAbsolutePath { field: &'static str, value: String },
+    #[error("unit.name contains unsafe path characters: {value}")]
+    UnsafeUnitName { value: String },
 }
 
 impl UnitValidationError {
@@ -145,12 +152,20 @@ impl UnitValidationError {
         match self {
             Self::EmptyField { field } => field,
             Self::NonAbsolutePath { field, .. } => field,
+            Self::UnsafeUnitName { .. } => "unit.name",
         }
     }
 }
 
 pub fn parse_unit_toml(input: &str) -> Result<UnitDefinition, UnitParseError> {
     Ok(toml::from_str(input)?)
+}
+
+pub fn is_safe_unit_name(unit: &str) -> bool {
+    !unit.is_empty()
+        && unit
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
 }
 
 #[cfg(test)]
@@ -246,6 +261,16 @@ environment = ["RUST_LOG=info"]
             .expect_err("relative start program must fail");
 
         assert_eq!(error.field(), "exec.start[0]");
+    }
+
+    #[test]
+    fn validation_rejects_unsafe_unit_name() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.unit.name = "../escape".to_string();
+
+        let error = unit.validate().expect_err("unsafe unit name must fail");
+
+        assert_eq!(error.field(), "unit.name");
     }
 
     #[test]

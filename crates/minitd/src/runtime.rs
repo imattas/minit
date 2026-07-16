@@ -1,12 +1,12 @@
 use crate::cgroups::{CgroupError, CgroupFs, CgroupManager};
 use crate::control::ControlRuntime;
 use crate::reaper::{drain_reap_events, ReapStatus, Reaper};
-use minit_core::manager::{ServiceManager, ServiceManagerError};
+use minit_core::manager::{ServiceManager, ServiceManagerError, StartPlan};
 use std::time::Duration;
 use thiserror::Error;
 
 pub trait ProcessSpawner {
-    fn spawn(&mut self, argv: &[String]) -> Result<u32, SpawnError>;
+    fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError>;
 }
 
 #[derive(Default)]
@@ -85,7 +85,7 @@ where
         return Err(error.into());
     }
 
-    let pid = match spawner.spawn(&plan.argv) {
+    let pid = match spawner.spawn(&plan) {
         Ok(pid) => pid,
         Err(error) => {
             let _ = services.mark_failed(unit);
@@ -238,17 +238,41 @@ where
 pub struct CommandSpawner;
 
 impl ProcessSpawner for CommandSpawner {
-    fn spawn(&mut self, argv: &[String]) -> Result<u32, SpawnError> {
-        let Some(program) = argv.first() else {
+    fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError> {
+        let Some(program) = plan.argv.first() else {
             return Err(SpawnError("empty argv".to_string()));
         };
-        let child = std::process::Command::new(program)
-            .args(&argv[1..])
-            .spawn()
-            .map_err(|err| SpawnError(err.to_string()))?;
+        let mut command = std::process::Command::new(program);
+        command.args(&plan.argv[1..]);
+        if let Some(working_directory) = &plan.working_directory {
+            command.current_dir(working_directory);
+        }
+        configure_child_security(&mut command, plan.no_new_privileges);
+        let child = command.spawn().map_err(|err| SpawnError(err.to_string()))?;
         Ok(child.id())
     }
 }
+
+#[cfg(target_os = "linux")]
+fn configure_child_security(command: &mut std::process::Command, no_new_privileges: bool) {
+    use std::os::unix::process::CommandExt;
+
+    if no_new_privileges {
+        unsafe {
+            command.pre_exec(|| {
+                let result = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+                if result == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error())
+                }
+            });
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn configure_child_security(_command: &mut std::process::Command, _no_new_privileges: bool) {}
 
 #[cfg(test)]
 mod tests {
@@ -298,8 +322,8 @@ mod tests {
     }
 
     impl ProcessSpawner for FakeSpawner {
-        fn spawn(&mut self, argv: &[String]) -> Result<u32, SpawnError> {
-            self.argv.push(argv.to_vec());
+        fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError> {
+            self.argv.push(plan.argv.clone());
             Ok(self.next_pid)
         }
     }

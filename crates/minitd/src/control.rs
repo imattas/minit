@@ -187,16 +187,19 @@ pub fn run_control_socket(
     service: &mut ControlService<impl ControlRuntime>,
 ) -> Result<(), ControlError> {
     use std::io::BufReader;
+    use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
 
     if let Some(parent) = config.socket_path.parent() {
         std::fs::create_dir_all(parent)?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
     }
     if config.socket_path.exists() {
         std::fs::remove_file(&config.socket_path)?;
     }
 
     let listener = UnixListener::bind(&config.socket_path)?;
+    std::fs::set_permissions(&config.socket_path, std::fs::Permissions::from_mode(0o600))?;
     eprintln!(
         "minitd: normal mode ready; control socket {}",
         config.socket_path.display()

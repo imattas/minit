@@ -80,7 +80,7 @@ impl CgroupManager {
     }
 
     fn unit_path(&self, unit: &str) -> Result<PathBuf, CgroupError> {
-        if !is_safe_unit_name(unit) {
+        if !minit_core::unit::is_safe_unit_name(unit) {
             return Err(CgroupError::UnsafeUnitName(unit.to_string()));
         }
         Ok(self.root.join(unit))
@@ -105,13 +105,6 @@ impl CgroupFs for LinuxCgroupFs {
     fn write(&mut self, path: &Path, value: &str) -> Result<(), CgroupError> {
         std::fs::write(path, value).map_err(|err| CgroupError::Fs(err.to_string()))
     }
-}
-
-fn is_safe_unit_name(unit: &str) -> bool {
-    !unit.is_empty()
-        && unit
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
 }
 
 #[cfg(test)]

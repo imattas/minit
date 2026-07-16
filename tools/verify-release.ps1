@@ -14,6 +14,9 @@ function Invoke-Step {
 
     Write-Host "==> $Name"
     & $Script
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Name failed with exit code $LASTEXITCODE"
+    }
 }
 
 Invoke-Step "format check" { cargo fmt --check }
