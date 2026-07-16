@@ -23,6 +23,12 @@ Invoke-Step "format check" { cargo fmt --check }
 Invoke-Step "test suite" { cargo test }
 Invoke-Step "build minitd for linux musl" { cargo build -p minitd --target x86_64-unknown-linux-musl }
 Invoke-Step "build minitctl for linux musl" { cargo build -p minitctl --target x86_64-unknown-linux-musl }
+Invoke-Step "package release artifacts" {
+    powershell -NoProfile -ExecutionPolicy Bypass -File tools\package-release.ps1 `
+        -OutputDir tools\release\artifacts `
+        -Target x86_64-unknown-linux-musl `
+        -Configuration release
+}
 
 if ($Kernel -and $BusyBoxPath) {
     $initramfs = "tools\vm\artifacts\minit-normal-initramfs.cpio"

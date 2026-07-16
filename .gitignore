@@ -3,6 +3,7 @@
 /.worktrees/
 /tests/vm/artifacts/
 /tools/vm/artifacts/
+/tools/release/artifacts/
 *.log
 *.img
 *.cpio
