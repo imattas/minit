@@ -1,12 +1,14 @@
 param(
     [string]$MinitdPath,
+    [string]$MinitctlPath,
     [string]$BusyBoxPath,
+    [string]$UnitDir,
     [string]$Output,
     [switch]$Help
 )
 
 if ($Help) {
-    Write-Output "Usage: build-initramfs.ps1 -MinitdPath <minitd> -BusyBoxPath <busybox> -Output <initramfs.cpio>"
+    Write-Output "Usage: build-initramfs.ps1 -MinitdPath <minitd> [-MinitctlPath <minitctl>] -BusyBoxPath <busybox> [-UnitDir <service-dir>] -Output <initramfs.cpio>"
     exit 0
 }
 
@@ -17,6 +19,16 @@ if (-not $MinitdPath -or -not (Test-Path -LiteralPath $MinitdPath)) {
 
 if (-not $BusyBoxPath -or -not (Test-Path -LiteralPath $BusyBoxPath)) {
     Write-Error "BusyBoxPath is required and must point to a static busybox binary."
+    exit 2
+}
+
+if ($MinitctlPath -and -not (Test-Path -LiteralPath $MinitctlPath)) {
+    Write-Error "MinitctlPath must point to a built Linux minitctl binary when provided."
+    exit 2
+}
+
+if ($UnitDir -and -not (Test-Path -LiteralPath $UnitDir)) {
+    Write-Error "UnitDir must point to a directory of TOML service files when provided."
     exit 2
 }
 
@@ -40,9 +52,15 @@ if (Test-Path -LiteralPath $root) {
     Remove-Item -LiteralPath $root -Recurse -Force
 }
 
-New-Item -ItemType Directory -Force -Path $root, "$root/bin", "$root/sbin", "$root/proc", "$root/sys", "$root/dev", "$root/run" | Out-Null
+New-Item -ItemType Directory -Force -Path $root, "$root/bin", "$root/sbin", "$root/proc", "$root/sys", "$root/dev", "$root/run", "$root/etc/minit/services" | Out-Null
 Copy-Item -LiteralPath $MinitdPath -Destination "$root/init" -Force
 Copy-Item -LiteralPath $BusyBoxPath -Destination "$root/bin/busybox" -Force
+if ($MinitctlPath) {
+    Copy-Item -LiteralPath $MinitctlPath -Destination "$root/bin/minitctl" -Force
+}
+if ($UnitDir) {
+    Copy-Item -Path (Join-Path $UnitDir "*.toml") -Destination "$root/etc/minit/services" -Force
+}
 
 $rootSlash = $root.Replace('\', '/')
 $outputSlash = $outputPath.Replace('\', '/')
@@ -55,6 +73,7 @@ root='$bashRoot'
 output='$bashOutput'
 cd "`$root"
 chmod +x init bin/busybox
+if [ -f bin/minitctl ]; then chmod +x bin/minitctl; fi
 ln -sf busybox bin/sh
 ln -sf ../bin/busybox sbin/getty
 find . -print0 | cpio --null -o -H newc > "`$output"

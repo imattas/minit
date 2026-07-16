@@ -52,7 +52,9 @@ where
     }
 
     if should_enter_normal(args.clone(), is_pid_one, &kernel_cmdline) {
-        let config = match normal_config_from_args(args) {
+        let config = match normal_config_from_kernel_cmdline(&kernel_cmdline)
+            .and_then(|kernel_config| merge_normal_config(kernel_config, args))
+        {
             Ok(config) => config,
             Err(error) => {
                 eprintln!("minitd: {error}", error = error.0);
@@ -161,6 +163,44 @@ where
     Ok(config)
 }
 
+pub fn normal_config_from_kernel_cmdline(
+    kernel_cmdline: &str,
+) -> Result<NormalConfig, ConfigError> {
+    let mut config = NormalConfig::default();
+    for arg in kernel_cmdline.split_whitespace() {
+        if let Some(value) = arg.strip_prefix("minit.unit_dir=") {
+            config.unit_dir = PathBuf::from(value);
+        } else if let Some(value) = arg.strip_prefix("minit.control_socket=") {
+            config.socket.socket_path = PathBuf::from(value);
+        } else if let Some(value) = arg.strip_prefix("minit.max_requests=") {
+            config.socket.max_requests = Some(
+                value
+                    .parse()
+                    .map_err(|_| ConfigError("minit.max_requests must be a number".to_string()))?,
+            );
+        }
+    }
+    Ok(config)
+}
+
+fn merge_normal_config<I, S>(mut config: NormalConfig, args: I) -> Result<NormalConfig, ConfigError>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let arg_config = normal_config_from_args(args)?;
+    if arg_config.unit_dir != PathBuf::from(DEFAULT_UNIT_DIR) {
+        config.unit_dir = arg_config.unit_dir;
+    }
+    if arg_config.socket.socket_path != PathBuf::from(minit_core::ipc::DEFAULT_CONTROL_SOCKET) {
+        config.socket.socket_path = arg_config.socket.socket_path;
+    }
+    if arg_config.socket.max_requests.is_some() {
+        config.socket.max_requests = arg_config.socket.max_requests;
+    }
+    Ok(config)
+}
+
 fn current_process_is_pid_one() -> bool {
     std::process::id() == 1
 }
@@ -168,6 +208,14 @@ fn current_process_is_pid_one() -> bool {
 fn read_kernel_cmdline() -> String {
     #[cfg(target_os = "linux")]
     {
+        let first_attempt = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
+        if !first_attempt.trim().is_empty() {
+            return first_attempt;
+        }
+
+        if std::process::id() == 1 {
+            let _ = mount_proc_for_cmdline();
+        }
         std::fs::read_to_string("/proc/cmdline").unwrap_or_default()
     }
 
@@ -175,6 +223,19 @@ fn read_kernel_cmdline() -> String {
     {
         String::new()
     }
+}
+
+#[cfg(target_os = "linux")]
+fn mount_proc_for_cmdline() -> Result<(), String> {
+    std::fs::create_dir_all("/proc").map_err(|err| err.to_string())?;
+    nix::mount::mount(
+        Some("proc"),
+        "/proc",
+        Some("proc"),
+        nix::mount::MsFlags::empty(),
+        None::<&str>,
+    )
+    .map_err(|err| err.to_string())
 }
 
 fn run_rescue_entrypoint() -> i32 {
@@ -321,5 +382,23 @@ mod tests {
             std::path::PathBuf::from("/tmp/minit.sock")
         );
         assert_eq!(config.socket.max_requests, Some(2));
+    }
+
+    #[test]
+    fn normal_config_parses_kernel_cmdline_options() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.unit_dir=/etc/minit/services minit.control_socket=/run/minit/minitd.sock minit.max_requests=1",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.unit_dir,
+            std::path::PathBuf::from("/etc/minit/services")
+        );
+        assert_eq!(
+            config.socket.socket_path,
+            std::path::PathBuf::from("/run/minit/minitd.sock")
+        );
+        assert_eq!(config.socket.max_requests, Some(1));
     }
 }

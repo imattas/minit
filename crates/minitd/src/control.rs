@@ -179,6 +179,10 @@ pub fn run_control_socket(
     }
 
     let listener = UnixListener::bind(&config.socket_path)?;
+    eprintln!(
+        "minitd: normal mode ready; control socket {}",
+        config.socket_path.display()
+    );
     for stream in listener
         .incoming()
         .take(config.max_requests.unwrap_or(usize::MAX))

@@ -2,17 +2,25 @@ param(
     [string]$Kernel,
     [string]$Initramfs,
     [int]$TimeoutSeconds = 20,
+    [switch]$NormalMode,
     [switch]$AutoShutdownSmoke,
+    [string]$AppendExtra,
     [switch]$Help
 )
 
 $append = "console=ttyS0 init=/init minit.rescue=1"
+if ($NormalMode) {
+    $append = "console=ttyS0 init=/init minit.normal=1 minit.unit_dir=/etc/minit/services"
+}
 if ($AutoShutdownSmoke) {
     $append = "$append minit.rescue.autoshutdown=1"
 }
+if ($AppendExtra) {
+    $append = "$append $AppendExtra"
+}
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-AutoShutdownSmoke]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -55,11 +63,15 @@ try {
         Stop-Job -Job $job
         $output = Receive-Job -Job $job | Out-String
         $output | Write-Output
+        if ($NormalMode -and $output.Contains("minitd: normal mode ready")) {
+            Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
+            exit 0
+        }
         if ($output.Contains("/ #") -or $output.Contains("can't access tty; job control turned off")) {
             Write-Output "Detected rescue shell; VM boot smoke passed."
             exit 0
         }
-        Write-Error "QEMU timed out after $TimeoutSeconds seconds before rescue shell was detected."
+        Write-Error "QEMU timed out after $TimeoutSeconds seconds before expected smoke signal was detected."
         exit 4
     }
 
