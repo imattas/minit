@@ -8,6 +8,7 @@ param(
     [string]$ExpectStartUnit,
     [string]$ExpectStopUnit,
     [string]$ExpectRestartUnit,
+    [string]$ExpectCgroupCleanupUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -31,12 +32,15 @@ if ($ExpectStopUnit) {
 if ($ExpectRestartUnit) {
     $append = "$append minit.smoke_restart=$ExpectRestartUnit"
 }
+if ($ExpectCgroupCleanupUnit) {
+    $append = "$append minit.smoke_cgroup_cleanup=$ExpectCgroupCleanupUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -98,6 +102,12 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectCgroupCleanupUnit) {
+                if ($output.Contains("accepted: stopped $ExpectCgroupCleanupUnit") -and $output.Contains("cgroup-cleaned:$ExpectCgroupCleanupUnit")) {
+                    Write-Output "Detected cgroup cleanup for $ExpectCgroupCleanupUnit; VM cgroup cleanup smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -140,6 +150,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected minitctl restart/status for $ExpectRestartUnit was detected."
+        exit 5
+    }
+    if ($ExpectCgroupCleanupUnit) {
+        if ($output.Contains("accepted: stopped $ExpectCgroupCleanupUnit") -and $output.Contains("cgroup-cleaned:$ExpectCgroupCleanupUnit")) {
+            Write-Output "Detected cgroup cleanup for $ExpectCgroupCleanupUnit; VM cgroup cleanup smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected cgroup cleanup for $ExpectCgroupCleanupUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {

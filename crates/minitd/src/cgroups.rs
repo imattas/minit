@@ -19,6 +19,8 @@ pub enum CgroupError {
 
 pub trait CgroupFs {
     fn create_dir_all(&mut self, path: &Path) -> Result<(), CgroupError>;
+    fn read_to_string(&mut self, path: &Path) -> Result<String, CgroupError>;
+    fn remove_dir(&mut self, path: &Path) -> Result<(), CgroupError>;
     fn write(&mut self, path: &Path, value: &str) -> Result<(), CgroupError>;
 }
 
@@ -64,6 +66,19 @@ impl CgroupManager {
         fs.write(&path, "1\n")
     }
 
+    pub fn unit_is_empty<F: CgroupFs>(&self, fs: &mut F, unit: &str) -> Result<bool, CgroupError> {
+        let path = self.unit_path(unit)?.join("cgroup.events");
+        let events = fs.read_to_string(&path)?;
+        Ok(events
+            .lines()
+            .any(|line| line.split_whitespace().eq(["populated", "0"])))
+    }
+
+    pub fn remove_unit<F: CgroupFs>(&self, fs: &mut F, unit: &str) -> Result<(), CgroupError> {
+        let path = self.unit_path(unit)?;
+        fs.remove_dir(&path)
+    }
+
     fn unit_path(&self, unit: &str) -> Result<PathBuf, CgroupError> {
         if !is_safe_unit_name(unit) {
             return Err(CgroupError::UnsafeUnitName(unit.to_string()));
@@ -77,6 +92,14 @@ pub struct LinuxCgroupFs;
 impl CgroupFs for LinuxCgroupFs {
     fn create_dir_all(&mut self, path: &Path) -> Result<(), CgroupError> {
         std::fs::create_dir_all(path).map_err(|err| CgroupError::Fs(err.to_string()))
+    }
+
+    fn read_to_string(&mut self, path: &Path) -> Result<String, CgroupError> {
+        std::fs::read_to_string(path).map_err(|err| CgroupError::Fs(err.to_string()))
+    }
+
+    fn remove_dir(&mut self, path: &Path) -> Result<(), CgroupError> {
+        std::fs::remove_dir(path).map_err(|err| CgroupError::Fs(err.to_string()))
     }
 
     fn write(&mut self, path: &Path, value: &str) -> Result<(), CgroupError> {
@@ -99,12 +122,26 @@ mod tests {
     #[derive(Default)]
     struct FakeCgroupFs {
         dirs: BTreeSet<PathBuf>,
+        reads: BTreeMap<PathBuf, String>,
+        removed: BTreeSet<PathBuf>,
         writes: BTreeMap<PathBuf, String>,
     }
 
     impl CgroupFs for FakeCgroupFs {
         fn create_dir_all(&mut self, path: &Path) -> Result<(), CgroupError> {
             self.dirs.insert(path.to_path_buf());
+            Ok(())
+        }
+
+        fn read_to_string(&mut self, path: &Path) -> Result<String, CgroupError> {
+            self.reads
+                .get(path)
+                .cloned()
+                .ok_or_else(|| CgroupError::Fs(format!("missing fake read {}", path.display())))
+        }
+
+        fn remove_dir(&mut self, path: &Path) -> Result<(), CgroupError> {
+            self.removed.insert(path.to_path_buf());
             Ok(())
         }
 
@@ -167,6 +204,30 @@ mod tests {
                 .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")),
             Some(&"1\n".to_string())
         );
+    }
+
+    #[test]
+    fn unit_is_empty_reads_cgroup_events() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+        fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
+            "populated 0\nfrozen 0\n".to_string(),
+        );
+
+        assert!(manager.unit_is_empty(&mut fs, "sshd.service").unwrap());
+    }
+
+    #[test]
+    fn remove_unit_removes_per_unit_cgroup() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+
+        manager.remove_unit(&mut fs, "sshd.service").unwrap();
+
+        assert!(fs
+            .removed
+            .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
     }
 
     #[test]

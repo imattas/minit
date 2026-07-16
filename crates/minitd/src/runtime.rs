@@ -1,6 +1,7 @@
 use crate::cgroups::{CgroupError, CgroupFs, CgroupManager};
 use crate::control::ControlRuntime;
 use minit_core::manager::{ServiceManager, ServiceManagerError};
+use std::time::Duration;
 use thiserror::Error;
 
 pub trait ProcessSpawner {
@@ -19,6 +20,8 @@ pub enum RuntimeError {
     Cgroup(#[from] CgroupError),
     #[error("spawn error: {0}")]
     Spawn(#[from] SpawnError),
+    #[error("cgroup for {0} did not become empty after kill")]
+    CgroupStillPopulated(String),
 }
 
 pub fn start_service<F, P>(
@@ -66,8 +69,29 @@ where
     F: CgroupFs,
 {
     cgroups.kill_unit(cgroup_fs, unit)?;
+    wait_until_cgroup_empty(cgroups, cgroup_fs, unit)?;
+    cgroups.remove_unit(cgroup_fs, unit)?;
     services.mark_inactive(unit)?;
     Ok(())
+}
+
+fn wait_until_cgroup_empty<F>(
+    cgroups: &CgroupManager,
+    cgroup_fs: &mut F,
+    unit: &str,
+) -> Result<(), RuntimeError>
+where
+    F: CgroupFs,
+{
+    for attempt in 0..20 {
+        if cgroups.unit_is_empty(cgroup_fs, unit)? {
+            return Ok(());
+        }
+        if attempt < 19 {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    Err(RuntimeError::CgroupStillPopulated(unit.to_string()))
 }
 
 pub struct ServiceRuntime<F, P> {
@@ -137,12 +161,26 @@ mod tests {
     #[derive(Default)]
     struct FakeCgroupFs {
         dirs: BTreeSet<PathBuf>,
+        reads: BTreeMap<PathBuf, String>,
+        removed: BTreeSet<PathBuf>,
         writes: BTreeMap<PathBuf, String>,
     }
 
     impl CgroupFs for FakeCgroupFs {
         fn create_dir_all(&mut self, path: &Path) -> Result<(), CgroupError> {
             self.dirs.insert(path.to_path_buf());
+            Ok(())
+        }
+
+        fn read_to_string(&mut self, path: &Path) -> Result<String, CgroupError> {
+            self.reads
+                .get(path)
+                .cloned()
+                .ok_or_else(|| CgroupError::Fs(format!("missing fake read {}", path.display())))
+        }
+
+        fn remove_dir(&mut self, path: &Path) -> Result<(), CgroupError> {
+            self.removed.insert(path.to_path_buf());
             Ok(())
         }
 
@@ -224,6 +262,10 @@ start = ["/usr/bin/sshd", "-D"]
         services.mark_active("sshd.service", 321).unwrap();
         let cgroups = CgroupManager::new("/sys/fs/cgroup/minit");
         let mut cgroup_fs = FakeCgroupFs::default();
+        cgroup_fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
+            "populated 0\nfrozen 0\n".to_string(),
+        );
 
         stop_service(&mut services, &cgroups, &mut cgroup_fs, "sshd.service").unwrap();
 
@@ -233,8 +275,35 @@ start = ["/usr/bin/sshd", "-D"]
                 .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")),
             Some(&"1\n".to_string())
         );
+        assert!(cgroup_fs
+            .removed
+            .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
         let status = services.status(Some("sshd.service")).unwrap();
         assert_eq!(status[0].state, UnitState::Inactive);
         assert_eq!(status[0].main_pid, None);
+    }
+
+    #[test]
+    fn stop_service_fails_if_cgroup_stays_populated() {
+        let mut services = manager_with_sshd();
+        services.plan_start("sshd.service").unwrap();
+        services.mark_active("sshd.service", 321).unwrap();
+        let cgroups = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut cgroup_fs = FakeCgroupFs::default();
+        cgroup_fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
+            "populated 1\nfrozen 0\n".to_string(),
+        );
+
+        let error =
+            stop_service(&mut services, &cgroups, &mut cgroup_fs, "sshd.service").unwrap_err();
+
+        assert_eq!(
+            error,
+            RuntimeError::CgroupStillPopulated("sshd.service".to_string())
+        );
+        assert!(!cgroup_fs
+            .removed
+            .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
     }
 }
