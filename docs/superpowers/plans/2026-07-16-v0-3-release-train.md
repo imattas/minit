@@ -162,5 +162,5 @@
 - [x] Update version and release notes.
 - [x] Run `cargo fmt --check`, `cargo test`, `tools\verify-security.ps1`, and full VM `tools\verify-release.ps1`.
 - [x] Commit release prep.
-- [ ] Tag and push.
-- [ ] Verify GitHub release workflow.
+- [x] Tag and push.
+- [x] Verify GitHub release workflow.
