@@ -2,11 +2,17 @@ param(
     [string]$Kernel,
     [string]$Initramfs,
     [int]$TimeoutSeconds = 20,
+    [switch]$AutoShutdownSmoke,
     [switch]$Help
 )
 
+$append = "console=ttyS0 init=/init minit.rescue=1"
+if ($AutoShutdownSmoke) {
+    $append = "$append minit.rescue.autoshutdown=1"
+}
+
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio>"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-AutoShutdownSmoke]"
     exit 0
 }
 
@@ -20,6 +26,9 @@ if (-not $Initramfs -or -not (Test-Path -LiteralPath $Initramfs)) {
     exit 2
 }
 
+$kernelPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Kernel)
+$initramfsPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Initramfs)
+
 $qemu = Get-Command qemu-system-x86_64 -ErrorAction SilentlyContinue
 if (-not $qemu) {
     Write-Error "qemu-system-x86_64 is required for VM verification."
@@ -28,23 +37,34 @@ if (-not $qemu) {
 
 $args = @(
     "-m", "256M",
-    "-kernel", $Kernel,
-    "-initrd", $Initramfs,
-    "-append", "console=ttyS0 init=/init minit.rescue=1",
+    "-kernel", $kernelPath,
+    "-initrd", $initramfsPath,
+    "-append", $append,
     "-nographic",
     "-no-reboot"
 )
 
-$process = Start-Process -FilePath $qemu.Source -ArgumentList $args -NoNewWindow -PassThru
+$job = Start-Job -ScriptBlock {
+    param($QemuPath, $QemuArgs)
+    & $QemuPath @QemuArgs
+    exit $LASTEXITCODE
+} -ArgumentList $qemu.Source, $args
+
 try {
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-        Stop-Process -Id $process.Id -Force
-        Write-Error "QEMU timed out after $TimeoutSeconds seconds."
+    if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+        Stop-Job -Job $job
+        $output = Receive-Job -Job $job | Out-String
+        $output | Write-Output
+        if ($output.Contains("/ #") -or $output.Contains("can't access tty; job control turned off")) {
+            Write-Output "Detected rescue shell; VM boot smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU timed out after $TimeoutSeconds seconds before rescue shell was detected."
         exit 4
     }
-    exit $process.ExitCode
+
+    Receive-Job -Job $job | Write-Output
+    exit 0
 } finally {
-    if (-not $process.HasExited) {
-        Stop-Process -Id $process.Id -Force
-    }
+    Remove-Job -Job $job -Force
 }

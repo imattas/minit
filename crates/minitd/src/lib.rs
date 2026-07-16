@@ -17,7 +17,10 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    if is_rescue_requested(_args) {
+    let is_pid_one = current_process_is_pid_one();
+    let kernel_cmdline = read_kernel_cmdline();
+
+    if should_enter_rescue(_args, is_pid_one, &kernel_cmdline) {
         return run_rescue_entrypoint();
     }
 
@@ -32,6 +35,34 @@ where
     args.into_iter()
         .map(Into::into)
         .any(|arg| arg == "--rescue" || arg == "minit.rescue=1")
+}
+
+pub fn should_enter_rescue<I, S>(args: I, is_pid_one: bool, kernel_cmdline: &str) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    is_rescue_requested(args)
+        || kernel_cmdline
+            .split_whitespace()
+            .any(|arg| arg == "minit.rescue=1")
+        || is_pid_one
+}
+
+fn current_process_is_pid_one() -> bool {
+    std::process::id() == 1
+}
+
+fn read_kernel_cmdline() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/cmdline").unwrap_or_default()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        String::new()
+    }
 }
 
 fn run_rescue_entrypoint() -> i32 {
@@ -73,5 +104,16 @@ mod tests {
     #[test]
     fn host_run_accepts_kernel_rescue_arg() {
         assert_eq!(crate::run_with_args(["minitd", "minit.rescue=1"]), 0);
+    }
+
+    #[test]
+    fn pid_one_enters_rescue_from_kernel_cmdline() {
+        assert!(crate::should_enter_rescue(
+            ["/init"],
+            true,
+            "console=ttyS0 minit.rescue=1"
+        ));
+        assert!(crate::should_enter_rescue(["/init"], true, "console=ttyS0"));
+        assert!(!crate::should_enter_rescue(["minitd"], false, ""));
     }
 }

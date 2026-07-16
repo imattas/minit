@@ -25,9 +25,9 @@ if (-not $Output) {
     exit 2
 }
 
-$bash = Get-Command bash -ErrorAction SilentlyContinue
-if (-not $bash) {
-    Write-Error "bash with find, chmod, ln, and cpio is required to build the initramfs."
+$wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+if (-not $wsl) {
+    Write-Error "wsl.exe with bash, find, chmod, ln, and cpio is required to build the initramfs."
     exit 3
 }
 
@@ -44,23 +44,34 @@ New-Item -ItemType Directory -Force -Path $root, "$root/bin", "$root/sbin", "$ro
 Copy-Item -LiteralPath $MinitdPath -Destination "$root/init" -Force
 Copy-Item -LiteralPath $BusyBoxPath -Destination "$root/bin/busybox" -Force
 
-$env:MINIT_INITRAMFS_ROOT = $root
-$env:MINIT_INITRAMFS_OUTPUT = $outputPath
+$rootSlash = $root.Replace('\', '/')
+$outputSlash = $outputPath.Replace('\', '/')
+$bashRoot = (& $wsl.Source wslpath -a $rootSlash).Trim()
+$bashOutput = (& $wsl.Source wslpath -a $outputSlash).Trim()
 
-$script = @'
+$script = @"
 set -euo pipefail
-root="$(wslpath -a "$MINIT_INITRAMFS_ROOT" 2>/dev/null || printf '%s' "$MINIT_INITRAMFS_ROOT")"
-output="$(wslpath -a "$MINIT_INITRAMFS_OUTPUT" 2>/dev/null || printf '%s' "$MINIT_INITRAMFS_OUTPUT")"
-cd "$root"
+root='$bashRoot'
+output='$bashOutput'
+cd "`$root"
 chmod +x init bin/busybox
 ln -sf busybox bin/sh
 ln -sf ../bin/busybox sbin/getty
-find . -print0 | cpio --null -o -H newc > "$output"
-'@
+find . -print0 | cpio --null -o -H newc > "`$output"
+"@
 
-& $bash.Source -lc $script
+$scriptPath = Join-Path $outputDir "build-initramfs.sh"
+[System.IO.File]::WriteAllText(
+    $scriptPath,
+    ($script -replace "`r`n", "`n"),
+    [System.Text.Encoding]::ASCII
+)
+$scriptSlash = $scriptPath.Replace('\', '/')
+$bashScriptPath = (& $wsl.Source wslpath -a $scriptSlash).Trim()
+
+& $wsl.Source bash $bashScriptPath
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to build initramfs with bash/cpio."
+    Write-Error "Failed to build initramfs with WSL bash/cpio."
     exit $LASTEXITCODE
 }
 
