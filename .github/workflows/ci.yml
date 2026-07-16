@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Format
+        run: cargo fmt --check
+      - name: Test
+        run: cargo test
+      - name: Build Linux minitd
+        run: cargo build -p minitd --target x86_64-unknown-linux-musl
+      - name: Build Linux minitctl
+        run: cargo build -p minitctl --target x86_64-unknown-linux-musl
