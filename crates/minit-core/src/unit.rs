@@ -16,9 +16,7 @@ pub struct UnitDefinition {
 impl UnitDefinition {
     pub fn validate(&self) -> Result<(), UnitValidationError> {
         if self.unit.name.trim().is_empty() {
-            return Err(UnitValidationError::EmptyField {
-                field: "unit.name",
-            });
+            return Err(UnitValidationError::EmptyField { field: "unit.name" });
         }
 
         let Some(program) = self.exec.start.first() else {
@@ -214,10 +212,8 @@ environment = ["RUST_LOG=info"]
     #[test]
     fn parses_all_example_service_files() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let examples_dir =
-            std::path::Path::new(manifest_dir).join("../../config/examples");
-        let entries =
-            std::fs::read_dir(&examples_dir).expect("config/examples should exist");
+        let examples_dir = std::path::Path::new(manifest_dir).join("../../config/examples");
+        let entries = std::fs::read_dir(&examples_dir).expect("config/examples should exist");
         let mut parsed = 0;
 
         for entry in entries {
