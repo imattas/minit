@@ -112,6 +112,10 @@ where
         let _ = services.mark_failed(unit);
         return Err(error.into());
     }
+    if let Err(error) = cgroups.apply_resources(cgroup_fs, unit, &plan.resources) {
+        let _ = services.mark_failed(unit);
+        return Err(error.into());
+    }
 
     let pid = match spawner.spawn(&plan) {
         Ok(pid) => pid,
@@ -361,7 +365,18 @@ impl ProcessSpawner for CommandSpawner {
         if let Some(working_directory) = &plan.working_directory {
             command.current_dir(working_directory);
         }
-        configure_child_security(&mut command, plan.no_new_privileges);
+        command.env_clear();
+        for entry in &plan.environment {
+            if let Some((key, value)) = entry.split_once('=') {
+                command.env(key, value);
+            }
+        }
+        configure_child_security(
+            &mut command,
+            plan.no_new_privileges,
+            plan.user.as_deref(),
+            plan.group.as_deref(),
+        );
         let child = command.spawn().map_err(|err| SpawnError(err.to_string()))?;
         Ok(child.id())
     }
@@ -391,26 +406,59 @@ fn terminate_process(_pid: u32) -> Result<(), SignalError> {
     Ok(())
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn parse_security_id(value: &str) -> Option<u32> {
+    if value == "root" {
+        Some(0)
+    } else {
+        value.parse::<u32>().ok()
+    }
+}
+
 #[cfg(target_os = "linux")]
-fn configure_child_security(command: &mut std::process::Command, no_new_privileges: bool) {
+fn configure_child_security(
+    command: &mut std::process::Command,
+    no_new_privileges: bool,
+    user: Option<&str>,
+    group: Option<&str>,
+) {
     use std::os::unix::process::CommandExt;
 
-    if no_new_privileges {
+    if no_new_privileges || user.is_some() || group.is_some() {
+        let uid = user.and_then(parse_security_id);
+        let gid = group.and_then(parse_security_id);
         unsafe {
-            command.pre_exec(|| {
-                let result = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-                if result == 0 {
-                    Ok(())
-                } else {
-                    Err(std::io::Error::last_os_error())
+            command.pre_exec(move || {
+                if let Some(gid) = gid {
+                    if libc::setgid(gid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
+                if let Some(uid) = uid {
+                    if libc::setuid(uid) != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                if no_new_privileges {
+                    let result = libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+                    if result != 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
             });
         }
     }
 }
 
 #[cfg(not(target_os = "linux"))]
-fn configure_child_security(_command: &mut std::process::Command, _no_new_privileges: bool) {}
+fn configure_child_security(
+    _command: &mut std::process::Command,
+    _no_new_privileges: bool,
+    _user: Option<&str>,
+    _group: Option<&str>,
+) {
+}
 
 #[cfg(test)]
 mod tests {
@@ -698,5 +746,12 @@ backoff = "fixed"
         assert_eq!(stop_poll_attempts(Duration::from_millis(25)), 1);
         assert_eq!(stop_poll_attempts(Duration::from_millis(26)), 2);
         assert_eq!(stop_poll_attempts(Duration::from_millis(500)), 20);
+    }
+
+    #[test]
+    fn security_principals_parse_root_and_numeric_ids() {
+        assert_eq!(parse_security_id("root"), Some(0));
+        assert_eq!(parse_security_id("1000"), Some(1000));
+        assert_eq!(parse_security_id("daemon"), None);
     }
 }

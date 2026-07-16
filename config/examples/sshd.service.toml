@@ -23,6 +23,3 @@ max_delay = "5min"
 user = "root"
 group = "root"
 no_new_privileges = true
-private_tmp = true
-readonly_paths = ["/usr"]
-readwrite_paths = ["/var/lib/sshd"]

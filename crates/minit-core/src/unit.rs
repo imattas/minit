@@ -3,6 +3,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UnitDefinition {
     pub unit: UnitSection,
     #[serde(default)]
@@ -11,6 +12,8 @@ pub struct UnitDefinition {
     pub dependencies: DependencySection,
     #[serde(default)]
     pub restart: RestartSection,
+    #[serde(default)]
+    pub resources: ResourceSection,
     #[serde(default)]
     pub security: SecuritySection,
 }
@@ -47,6 +50,31 @@ impl UnitDefinition {
             }
         }
 
+        if self.security.private_tmp {
+            return Err(UnitValidationError::UnsupportedSecurityOption {
+                field: "security.private_tmp",
+            });
+        }
+        if !self.security.readonly_paths.is_empty() {
+            return Err(UnitValidationError::UnsupportedSecurityOption {
+                field: "security.readonly_paths",
+            });
+        }
+        if !self.security.readwrite_paths.is_empty() {
+            return Err(UnitValidationError::UnsupportedSecurityOption {
+                field: "security.readwrite_paths",
+            });
+        }
+        for entry in &self.security.environment {
+            validate_environment_entry(entry)?;
+        }
+        if let Some(user) = &self.security.user {
+            validate_principal("security.user", user)?;
+        }
+        if let Some(group) = &self.security.group {
+            validate_principal("security.group", group)?;
+        }
+
         Ok(())
     }
 
@@ -60,6 +88,7 @@ impl UnitDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UnitSection {
     pub name: String,
     #[serde(default)]
@@ -73,6 +102,7 @@ fn default_unit_kind() -> String {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecSection {
     #[serde(default)]
     pub start: Vec<String>,
@@ -95,6 +125,7 @@ impl ExecSection {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DependencySection {
     #[serde(default)]
     pub after: Vec<String>,
@@ -109,11 +140,20 @@ pub struct DependencySection {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RestartSection {
     pub policy: Option<String>,
     pub limit: Option<String>,
     pub backoff: Option<String>,
     pub max_delay: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceSection {
+    pub memory_max: Option<String>,
+    pub cpu_max: Option<String>,
+    pub pids_max: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +235,7 @@ fn parse_duration(value: &str) -> Option<Duration> {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecuritySection {
     pub user: Option<String>,
     pub group: Option<String>,
@@ -226,6 +267,12 @@ pub enum UnitValidationError {
     UnsafeUnitName { value: String },
     #[error("unsupported unit kind: {value}")]
     UnsupportedUnitKind { value: String },
+    #[error("unsupported security option: {field}")]
+    UnsupportedSecurityOption { field: &'static str },
+    #[error("invalid environment entry: {value}")]
+    InvalidEnvironment { value: String },
+    #[error("{field} must be \"root\" or a numeric id, got {value}")]
+    InvalidPrincipal { field: &'static str, value: String },
 }
 
 impl UnitValidationError {
@@ -235,6 +282,9 @@ impl UnitValidationError {
             Self::NonAbsolutePath { field, .. } => field,
             Self::UnsafeUnitName { .. } => "unit.name",
             Self::UnsupportedUnitKind { .. } => "unit.kind",
+            Self::UnsupportedSecurityOption { field } => field,
+            Self::InvalidEnvironment { .. } => "security.environment",
+            Self::InvalidPrincipal { field, .. } => field,
         }
     }
 }
@@ -248,6 +298,41 @@ pub fn is_safe_unit_name(unit: &str) -> bool {
         && unit
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+}
+
+fn validate_environment_entry(entry: &str) -> Result<(), UnitValidationError> {
+    let Some((key, _value)) = entry.split_once('=') else {
+        return Err(UnitValidationError::InvalidEnvironment {
+            value: entry.to_string(),
+        });
+    };
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return Err(UnitValidationError::InvalidEnvironment {
+            value: entry.to_string(),
+        });
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return Err(UnitValidationError::InvalidEnvironment {
+            value: entry.to_string(),
+        });
+    }
+    if !chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return Err(UnitValidationError::InvalidEnvironment {
+            value: entry.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_principal(field: &'static str, value: &str) -> Result<(), UnitValidationError> {
+    if value == "root" || value.parse::<u32>().is_ok() {
+        return Ok(());
+    }
+    Err(UnitValidationError::InvalidPrincipal {
+        field,
+        value: value.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -284,9 +369,6 @@ max_delay = "5min"
 user = "root"
 group = "root"
 no_new_privileges = true
-private_tmp = true
-readonly_paths = ["/usr"]
-readwrite_paths = ["/var/lib/sshd"]
 environment = ["RUST_LOG=info"]
 "#;
 
@@ -379,6 +461,82 @@ wants = ["getty.service"]
         let error = unit.validate().expect_err("unsafe unit name must fail");
 
         assert_eq!(error.field(), "unit.name");
+    }
+
+    #[test]
+    fn parsing_rejects_unknown_fields() {
+        let error = parse_unit_toml(
+            r#"
+[unit]
+name = "bad.service"
+unknown = true
+
+[exec]
+start = ["/bin/true"]
+"#,
+        )
+        .expect_err("unknown fields must fail closed");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn validation_rejects_unsupported_security_options() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.security.private_tmp = true;
+
+        let error = unit
+            .validate()
+            .expect_err("unsupported security option must fail");
+
+        assert_eq!(error.field(), "security.private_tmp");
+    }
+
+    #[test]
+    fn validation_rejects_invalid_environment_entries() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.security.environment = vec!["BAD-NAME=value".to_string()];
+
+        let error = unit
+            .validate()
+            .expect_err("invalid environment entry must fail");
+
+        assert_eq!(error.field(), "security.environment");
+    }
+
+    #[test]
+    fn validation_rejects_unsupported_user_names() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.security.user = Some("daemon".to_string());
+
+        let error = unit
+            .validate()
+            .expect_err("unsupported user names must fail closed");
+
+        assert_eq!(error.field(), "security.user");
+    }
+
+    #[test]
+    fn parses_cgroup_resource_limits() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "limited.service"
+
+[exec]
+start = ["/bin/sleep", "60"]
+
+[resources]
+memory_max = "64M"
+cpu_max = "50000 100000"
+pids_max = "32"
+"#,
+        )
+        .expect("resource-limited unit should parse");
+
+        assert_eq!(unit.resources.memory_max.as_deref(), Some("64M"));
+        assert_eq!(unit.resources.cpu_max.as_deref(), Some("50000 100000"));
+        assert_eq!(unit.resources.pids_max.as_deref(), Some("32"));
     }
 
     #[test]

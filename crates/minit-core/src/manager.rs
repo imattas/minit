@@ -11,6 +11,10 @@ pub struct StartPlan {
     pub argv: Vec<String>,
     pub working_directory: Option<String>,
     pub no_new_privileges: bool,
+    pub user: Option<String>,
+    pub group: Option<String>,
+    pub environment: Vec<String>,
+    pub resources: crate::unit::ResourceSection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +194,10 @@ impl ServiceManager {
             argv: record.definition.exec.start.clone(),
             working_directory: record.definition.exec.working_directory.clone(),
             no_new_privileges: record.definition.security.no_new_privileges,
+            user: record.definition.security.user.clone(),
+            group: record.definition.security.group.clone(),
+            environment: record.definition.security.environment.clone(),
+            resources: record.definition.resources.clone(),
         })
     }
 
@@ -422,6 +430,8 @@ start = ["/usr/bin/sshd", "-D"]
         assert_eq!(plan.argv, vec!["/usr/bin/sshd", "-D"]);
         assert_eq!(plan.working_directory, None);
         assert!(!plan.no_new_privileges);
+        assert_eq!(plan.user, None);
+        assert_eq!(plan.group, None);
         assert_eq!(statuses[0].state, UnitState::Starting);
     }
 

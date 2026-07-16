@@ -1,0 +1,24 @@
+[package]
+name = "minit-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+minit-core = { path = "../crates/minit-core" }
+
+[[bin]]
+name = "unit_parse"
+path = "fuzz_targets/unit_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ipc_decode"
+path = "fuzz_targets/ipc_decode.rs"
+test = false
+doc = false

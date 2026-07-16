@@ -70,6 +70,25 @@ impl CgroupManager {
         fs.write(&path, "1\n")
     }
 
+    pub fn apply_resources<F: CgroupFs>(
+        &self,
+        fs: &mut F,
+        unit: &str,
+        resources: &minit_core::unit::ResourceSection,
+    ) -> Result<(), CgroupError> {
+        let unit_path = self.unit_path(unit)?;
+        if let Some(memory_max) = &resources.memory_max {
+            fs.write(&unit_path.join("memory.max"), &format!("{memory_max}\n"))?;
+        }
+        if let Some(cpu_max) = &resources.cpu_max {
+            fs.write(&unit_path.join("cpu.max"), &format!("{cpu_max}\n"))?;
+        }
+        if let Some(pids_max) = &resources.pids_max {
+            fs.write(&unit_path.join("pids.max"), &format!("{pids_max}\n"))?;
+        }
+        Ok(())
+    }
+
     pub fn unit_pids<F: CgroupFs>(&self, fs: &mut F, unit: &str) -> Result<Vec<u32>, CgroupError> {
         let path = self.unit_path(unit)?.join("cgroup.procs");
         let procs = fs.read_to_string(&path)?;
@@ -229,6 +248,37 @@ mod tests {
         let pids = manager.unit_pids(&mut fs, "sshd.service").unwrap();
 
         assert_eq!(pids, vec![123, 456]);
+    }
+
+    #[test]
+    fn apply_resources_writes_cgroup_limit_files() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+        let resources = minit_core::unit::ResourceSection {
+            memory_max: Some("64M".to_string()),
+            cpu_max: Some("50000 100000".to_string()),
+            pids_max: Some("32".to_string()),
+        };
+
+        manager
+            .apply_resources(&mut fs, "sshd.service", &resources)
+            .unwrap();
+
+        assert_eq!(
+            fs.writes
+                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/memory.max")),
+            Some(&"64M\n".to_string())
+        );
+        assert_eq!(
+            fs.writes
+                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cpu.max")),
+            Some(&"50000 100000\n".to_string())
+        );
+        assert_eq!(
+            fs.writes
+                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/pids.max")),
+            Some(&"32\n".to_string())
+        );
     }
 
     #[test]
