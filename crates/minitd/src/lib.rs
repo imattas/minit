@@ -32,6 +32,8 @@ pub struct NormalConfig {
     pub smoke_shutdown_mount_unit: Option<String>,
     pub smoke_events_unit: Option<String>,
     pub smoke_graph_unit: Option<String>,
+    pub smoke_wanted_failure_target: Option<String>,
+    pub smoke_required_failure_target: Option<String>,
     pub smoke_long_running_unit: Option<String>,
 }
 
@@ -56,6 +58,8 @@ impl Default for NormalConfig {
             smoke_shutdown_mount_unit: None,
             smoke_events_unit: None,
             smoke_graph_unit: None,
+            smoke_wanted_failure_target: None,
+            smoke_required_failure_target: None,
             smoke_long_running_unit: None,
         }
     }
@@ -245,6 +249,10 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_events_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_graph=") {
             config.smoke_graph_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_wanted_failure=") {
+            config.smoke_wanted_failure_target = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_required_failure=") {
+            config.smoke_required_failure_target = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_long_running=") {
             config.smoke_long_running_unit = Some(value.to_string());
         }
@@ -314,6 +322,12 @@ where
     }
     if arg_config.smoke_graph_unit.is_some() {
         config.smoke_graph_unit = arg_config.smoke_graph_unit;
+    }
+    if arg_config.smoke_wanted_failure_target.is_some() {
+        config.smoke_wanted_failure_target = arg_config.smoke_wanted_failure_target;
+    }
+    if arg_config.smoke_required_failure_target.is_some() {
+        config.smoke_required_failure_target = arg_config.smoke_required_failure_target;
     }
     if arg_config.smoke_long_running_unit.is_some() {
         config.smoke_long_running_unit = arg_config.smoke_long_running_unit;
@@ -484,6 +498,26 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {target}; /bin/minitctl --socket {socket_path} status {target}; /bin/minitctl --socket {socket_path} status network.service; /bin/minitctl --socket {socket_path} status demo-sleep"
                 ),
             ]);
+        } else if let Some(target) = &config.smoke_wanted_failure_target {
+            socket.max_requests = Some(4);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {target}; /bin/minitctl --socket {socket_path} status {target}; /bin/minitctl --socket {socket_path} status optional-fail.service; /bin/minitctl --socket {socket_path} status demo-sleep"
+                ),
+            ]);
+        } else if let Some(target) = &config.smoke_required_failure_target {
+            socket.max_requests = Some(3);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {target}; /bin/minitctl --socket {socket_path} status {target}; /bin/minitctl --socket {socket_path} status required-fail.service"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_mount_unit {
             socket.max_requests = Some(2);
             let socket_path = socket.socket_path.display();
@@ -582,6 +616,8 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_stuck_stop_unit.is_some()
                     || config.smoke_shutdown_stuck_unit.is_some()
                     || config.smoke_boot_target.is_some()
+                    || config.smoke_wanted_failure_target.is_some()
+                    || config.smoke_required_failure_target.is_some()
                     || config.smoke_mount_unit.is_some()
                     || config.smoke_mount_failure_unit.is_some()
                     || config.smoke_shutdown_mount_unit.is_some()
@@ -773,6 +809,8 @@ mod tests {
         assert_eq!(config.smoke_shutdown_mount_unit.as_deref(), None);
         assert_eq!(config.smoke_events_unit.as_deref(), None);
         assert_eq!(config.smoke_graph_unit.as_deref(), None);
+        assert_eq!(config.smoke_wanted_failure_target.as_deref(), None);
+        assert_eq!(config.smoke_required_failure_target.as_deref(), None);
         assert_eq!(config.smoke_long_running_unit.as_deref(), None);
     }
 
@@ -934,6 +972,27 @@ mod tests {
         assert_eq!(
             config.smoke_graph_unit.as_deref(),
             Some("multi-user.target")
+        );
+    }
+
+    #[test]
+    fn normal_config_parses_dependency_failure_smokes() {
+        let wanted = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_wanted_failure=wanted-failure.target",
+        )
+        .unwrap();
+        let required = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_required_failure=required-failure.target",
+        )
+        .unwrap();
+
+        assert_eq!(
+            wanted.smoke_wanted_failure_target.as_deref(),
+            Some("wanted-failure.target")
+        );
+        assert_eq!(
+            required.smoke_required_failure_target.as_deref(),
+            Some("required-failure.target")
         );
     }
 

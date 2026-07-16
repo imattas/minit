@@ -98,6 +98,22 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectBootTarget multi-user.target `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm wanted dependency failure smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectWantedFailureTarget wanted-failure.target `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
+    Invoke-Step "vm required dependency failure smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectRequiredFailureTarget required-failure.target `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm mount smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

@@ -700,7 +700,7 @@ fstype = "tmpfs"
             parsed += 1;
         }
 
-        assert_eq!(parsed, 12);
+        assert_eq!(parsed, 16);
     }
 
     #[test]

@@ -1,0 +1,7 @@
+[unit]
+name = "wanted-failure.target"
+kind = "target"
+description = "VM smoke target with a failing wanted dependency"
+
+[dependencies]
+wants = ["optional-fail.service", "demo-sleep"]

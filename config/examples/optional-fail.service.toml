@@ -1,0 +1,9 @@
+[unit]
+name = "optional-fail.service"
+description = "Service that fails for wanted dependency VM smoke"
+
+[exec]
+start = ["/bin/sh", "-c", "exit 1"]
+
+[restart]
+policy = "never"

@@ -1,0 +1,7 @@
+[unit]
+name = "required-failure.target"
+kind = "target"
+description = "VM smoke target with a failing required dependency"
+
+[dependencies]
+requires = ["required-fail.service"]

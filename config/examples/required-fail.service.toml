@@ -1,0 +1,9 @@
+[unit]
+name = "required-fail.service"
+description = "Service that fails for required dependency VM smoke"
+
+[exec]
+start = ["/bin/does-not-exist"]
+
+[restart]
+policy = "never"

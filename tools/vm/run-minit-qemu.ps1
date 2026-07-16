@@ -15,6 +15,8 @@ param(
     [string]$ExpectStuckStopUnit,
     [string]$ExpectShutdownStuckUnit,
     [string]$ExpectBootTarget,
+    [string]$ExpectWantedFailureTarget,
+    [string]$ExpectRequiredFailureTarget,
     [string]$ExpectMountUnit,
     [string]$ExpectMountFailureUnit,
     [string]$ExpectShutdownMountUnit,
@@ -65,6 +67,12 @@ if ($ExpectShutdownStuckUnit) {
 if ($ExpectBootTarget) {
     $append = "$append minit.smoke_boot_target=$ExpectBootTarget"
 }
+if ($ExpectWantedFailureTarget) {
+    $append = "$append minit.smoke_wanted_failure=$ExpectWantedFailureTarget"
+}
+if ($ExpectRequiredFailureTarget) {
+    $append = "$append minit.smoke_required_failure=$ExpectRequiredFailureTarget"
+}
 if ($ExpectMountUnit) {
     $append = "$append minit.smoke_mount=$ExpectMountUnit"
 }
@@ -88,7 +96,7 @@ if ($AppendExtra) {
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectLongRunningUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectLongRunningUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -186,6 +194,18 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectWantedFailureTarget) {
+                if ($output.Contains("accepted: started target $ExpectWantedFailureTarget") -and $output.Contains("unit: $ExpectWantedFailureTarget") -and $output.Contains("unit: optional-fail.service") -and $output.Contains("unit: demo-sleep") -and $output.Contains("state: failed") -and $output.Contains("state: active")) {
+                    Write-Output "Detected wanted dependency failure tolerance for $ExpectWantedFailureTarget; VM wanted-failure smoke passed."
+                    exit 0
+                }
+            }
+            if ($ExpectRequiredFailureTarget) {
+                if ($output.Contains("error: spawn error: failed to spawn service process") -and $output.Contains("unit: $ExpectRequiredFailureTarget") -and $output.Contains("state: inactive") -and $output.Contains("unit: required-fail.service") -and $output.Contains("state: failed")) {
+                    Write-Output "Detected required dependency failure for $ExpectRequiredFailureTarget; VM required-failure smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectMountUnit) {
                 if ($output.Contains("accepted: mounted $ExpectMountUnit") -and $output.Contains("unit: $ExpectMountUnit") -and $output.Contains("state: active") -and $output.Contains("mounted-path:/var/log")) {
                     Write-Output "Detected mount success for $ExpectMountUnit; VM mount smoke passed."
@@ -234,7 +254,7 @@ try {
                     exit 0
                 }
             }
-            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectGraphUnit -and -not $ExpectLongRunningUnit) {
+            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectGraphUnit -and -not $ExpectLongRunningUnit) {
                 Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
                 exit 0
             }
@@ -319,6 +339,22 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected boot target proof for $ExpectBootTarget was detected."
+        exit 5
+    }
+    if ($ExpectWantedFailureTarget) {
+        if ($output.Contains("accepted: started target $ExpectWantedFailureTarget") -and $output.Contains("unit: $ExpectWantedFailureTarget") -and $output.Contains("unit: optional-fail.service") -and $output.Contains("unit: demo-sleep") -and $output.Contains("state: failed") -and $output.Contains("state: active")) {
+            Write-Output "Detected wanted dependency failure tolerance for $ExpectWantedFailureTarget; VM wanted-failure smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected wanted dependency failure proof for $ExpectWantedFailureTarget was detected."
+        exit 5
+    }
+    if ($ExpectRequiredFailureTarget) {
+        if ($output.Contains("error: spawn error: failed to spawn service process") -and $output.Contains("unit: $ExpectRequiredFailureTarget") -and $output.Contains("state: inactive") -and $output.Contains("unit: required-fail.service") -and $output.Contains("state: failed")) {
+            Write-Output "Detected required dependency failure for $ExpectRequiredFailureTarget; VM required-failure smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected required dependency failure proof for $ExpectRequiredFailureTarget was detected."
         exit 5
     }
     if ($ExpectMountUnit) {
