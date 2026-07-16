@@ -34,6 +34,7 @@ pub struct NormalConfig {
     pub smoke_logs_unit: Option<String>,
     pub smoke_logs_follow_unit: Option<String>,
     pub smoke_graph_unit: Option<String>,
+    pub smoke_parallel_target: Option<String>,
     pub smoke_boot_timeline: bool,
     pub smoke_wanted_failure_target: Option<String>,
     pub smoke_required_failure_target: Option<String>,
@@ -64,6 +65,7 @@ impl Default for NormalConfig {
             smoke_logs_unit: None,
             smoke_logs_follow_unit: None,
             smoke_graph_unit: None,
+            smoke_parallel_target: None,
             smoke_boot_timeline: false,
             smoke_wanted_failure_target: None,
             smoke_required_failure_target: None,
@@ -261,6 +263,8 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_logs_follow_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_graph=") {
             config.smoke_graph_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_parallel_target=") {
+            config.smoke_parallel_target = Some(value.to_string());
         } else if arg == "minit.smoke_boot_timeline=1" {
             config.smoke_boot_timeline = true;
         } else if let Some(value) = arg.strip_prefix("minit.smoke_wanted_failure=") {
@@ -344,6 +348,9 @@ where
     }
     if arg_config.smoke_graph_unit.is_some() {
         config.smoke_graph_unit = arg_config.smoke_graph_unit;
+    }
+    if arg_config.smoke_parallel_target.is_some() {
+        config.smoke_parallel_target = arg_config.smoke_parallel_target;
     }
     if arg_config.smoke_boot_timeline {
         config.smoke_boot_timeline = true;
@@ -628,6 +635,16 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                 "graph".to_string(),
                 unit.clone(),
             ]);
+        } else if let Some(unit) = &config.smoke_parallel_target {
+            socket.max_requests = Some(4);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/sleep 1; /bin/minitctl --socket {socket_path} status parallel-a.service; /bin/minitctl --socket {socket_path} status parallel-b.service; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
         } else if config.smoke_boot_timeline {
             socket.max_requests = Some(1);
             let socket_path = socket.socket_path.display();
@@ -706,6 +723,7 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_logs_unit.is_some()
                     || config.smoke_logs_follow_unit.is_some()
                     || config.smoke_graph_unit.is_some()
+                    || config.smoke_parallel_target.is_some()
                     || config.smoke_boot_timeline
                     || config.smoke_long_running_unit.is_some()
                     || config.smoke_hardening_unit.is_some())
@@ -896,6 +914,7 @@ mod tests {
         assert_eq!(config.smoke_logs_unit.as_deref(), None);
         assert_eq!(config.smoke_logs_follow_unit.as_deref(), None);
         assert_eq!(config.smoke_graph_unit.as_deref(), None);
+        assert_eq!(config.smoke_parallel_target.as_deref(), None);
         assert!(!config.smoke_boot_timeline);
         assert_eq!(config.smoke_wanted_failure_target.as_deref(), None);
         assert_eq!(config.smoke_required_failure_target.as_deref(), None);
@@ -1081,6 +1100,19 @@ mod tests {
         assert_eq!(
             config.smoke_graph_unit.as_deref(),
             Some("multi-user.target")
+        );
+    }
+
+    #[test]
+    fn normal_config_parses_parallel_target_smoke() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_parallel_target=parallel.target",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.smoke_parallel_target.as_deref(),
+            Some("parallel.target")
         );
     }
 

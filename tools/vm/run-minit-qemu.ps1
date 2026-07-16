@@ -24,6 +24,7 @@ param(
     [string]$ExpectLogsUnit,
     [string]$ExpectLogsFollowUnit,
     [string]$ExpectGraphUnit,
+    [string]$ExpectParallelTarget,
     [switch]$ExpectBootTimeline,
     [string]$ExpectLongRunningUnit,
     [string]$ExpectHardeningUnit,
@@ -98,6 +99,9 @@ if ($ExpectLogsFollowUnit) {
 if ($ExpectGraphUnit) {
     $append = "$append minit.smoke_graph=$ExpectGraphUnit"
 }
+if ($ExpectParallelTarget) {
+    $append = "$append minit.smoke_parallel_target=$ExpectParallelTarget"
+}
 if ($ExpectBootTimeline) {
     $append = "$append minit.smoke_boot_timeline=1"
 }
@@ -112,7 +116,7 @@ if ($AppendExtra) {
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectParallelTarget <target>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -264,6 +268,12 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectParallelTarget) {
+                if ($output.Contains("accepted: started target $ExpectParallelTarget") -and $output.Contains("unit: parallel-a.service") -and $output.Contains("unit: parallel-b.service") -and $output.Contains("unit: $ExpectParallelTarget") -and $output.Contains("state: active")) {
+                    Write-Output "Detected parallel target start for $ExpectParallelTarget; VM parallel-target smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectBootTimeline) {
                 if ($output.Contains("event: 1") -and $output.Contains("scope: boot") -and $output.Contains("message: filesystems prepared") -and $output.Contains("event: 2") -and $output.Contains("message: units loaded")) {
                     Write-Output "Detected minitctl boot timeline; VM boot-timeline smoke passed."
@@ -294,7 +304,7 @@ try {
                     exit 0
                 }
             }
-            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectLogsUnit -and -not $ExpectLogsFollowUnit -and -not $ExpectGraphUnit -and -not $ExpectBootTimeline -and -not $ExpectLongRunningUnit -and -not $ExpectHardeningUnit) {
+            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectLogsUnit -and -not $ExpectLogsFollowUnit -and -not $ExpectGraphUnit -and -not $ExpectParallelTarget -and -not $ExpectBootTimeline -and -not $ExpectLongRunningUnit -and -not $ExpectHardeningUnit) {
                 Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
                 exit 0
             }
@@ -451,6 +461,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected graph proof for $ExpectGraphUnit was detected."
+        exit 5
+    }
+    if ($ExpectParallelTarget) {
+        if ($output.Contains("accepted: started target $ExpectParallelTarget") -and $output.Contains("unit: parallel-a.service") -and $output.Contains("unit: parallel-b.service") -and $output.Contains("unit: $ExpectParallelTarget") -and $output.Contains("state: active")) {
+            Write-Output "Detected parallel target start for $ExpectParallelTarget; VM parallel-target smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected parallel target proof for $ExpectParallelTarget was detected."
         exit 5
     }
     if ($ExpectBootTimeline) {

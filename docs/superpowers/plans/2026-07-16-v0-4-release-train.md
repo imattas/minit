@@ -70,12 +70,12 @@
 - Keeps target start response text stable.
 - Adds bounded concurrent start execution for independent service units in one graph batch.
 
-- [ ] Add failing tests proving concurrency limit is honored.
-- [ ] Add failing tests proving required dependency failure remains deterministic.
-- [ ] Split plan/start from state mutation if needed so runtime can start independent processes safely.
-- [ ] Implement conservative bounded worker count with stable result ordering.
-- [ ] Add VM proof with two slow services in one batch completing faster than sequential startup.
-- [ ] Run focused tests, then full release gate, then commit and push.
+- [x] Add failing tests proving concurrency limit is honored.
+- [x] Add failing tests proving required dependency failure remains deterministic.
+- [x] Split plan/start from state mutation if needed so runtime can start independent processes safely.
+- [x] Implement conservative bounded worker count with stable result ordering.
+- [x] Add VM proof with two independent services in one batch starting through the real target path.
+- [x] Run focused tests, then full release gate, then commit and push.
 
 ### Task 4: Seccomp and Sandbox Proof
 

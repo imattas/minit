@@ -1,0 +1,7 @@
+[unit]
+name = "parallel.target"
+kind = "target"
+description = "VM smoke target with independent services for parallel start"
+
+[dependencies]
+wants = ["parallel-a.service", "parallel-b.service"]

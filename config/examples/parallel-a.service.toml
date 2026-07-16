@@ -1,0 +1,16 @@
+[unit]
+name = "parallel-a.service"
+description = "First independent service for VM parallel target smoke"
+kind = "service"
+
+[exec]
+start = ["/bin/sleep", "5"]
+working_directory = "/"
+
+[restart]
+policy = "never"
+
+[security]
+user = "root"
+group = "root"
+no_new_privileges = true

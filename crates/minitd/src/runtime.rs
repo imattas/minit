@@ -7,9 +7,21 @@ use std::time::Duration;
 use thiserror::Error;
 
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const START_BATCH_MAX_PARALLEL: usize = 4;
 
 pub trait ProcessSpawner {
     fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError>;
+
+    fn spawn_batch(
+        &mut self,
+        plans: &[StartPlan],
+        _max_parallel: usize,
+    ) -> Vec<(String, Result<u32, SpawnError>)> {
+        plans
+            .iter()
+            .map(|plan| (plan.unit.clone(), self.spawn(plan)))
+            .collect()
+    }
 }
 
 pub trait ProcessSignaler {
@@ -343,6 +355,111 @@ where
         Ok(format!("started {unit} as pid {pid}"))
     }
 
+    fn start_batch(
+        &mut self,
+        services: &mut ServiceManager,
+        units: &[String],
+    ) -> Vec<(String, Result<String, String>)> {
+        let mut results = Vec::new();
+        results.resize_with(units.len(), || None);
+        let mut plans = Vec::new();
+
+        for (index, unit) in units.iter().enumerate() {
+            let is_service = match services.is_service(unit) {
+                Ok(is_service) => is_service,
+                Err(error) => {
+                    results[index] = Some((unit.clone(), Err(error.to_string())));
+                    continue;
+                }
+            };
+            if !is_service {
+                results[index] = Some((unit.clone(), self.start(services, unit)));
+                continue;
+            }
+
+            let plan = match services.plan_start(unit) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    results[index] =
+                        Some((unit.clone(), Err(RuntimeError::Manager(error).to_string())));
+                    continue;
+                }
+            };
+            if let Err(error) = self.cgroups.create_unit(&mut self.cgroup_fs, unit) {
+                let _ = services.mark_failed(unit);
+                results[index] = Some((unit.clone(), Err(RuntimeError::Cgroup(error).to_string())));
+                continue;
+            }
+            if let Err(error) =
+                self.cgroups
+                    .apply_resources(&mut self.cgroup_fs, unit, &plan.resources)
+            {
+                let _ = services.mark_failed(unit);
+                results[index] = Some((unit.clone(), Err(RuntimeError::Cgroup(error).to_string())));
+                continue;
+            }
+            plans.push((index, plan));
+        }
+
+        let start_results = self.spawner.spawn_batch(
+            &plans
+                .iter()
+                .map(|(_, plan)| plan.clone())
+                .collect::<Vec<_>>(),
+            START_BATCH_MAX_PARALLEL,
+        );
+        for ((index, _), (unit, result)) in plans.into_iter().zip(start_results) {
+            let message = match result {
+                Ok(pid) => {
+                    let attached = self
+                        .cgroups
+                        .attach_pid(&mut self.cgroup_fs, &unit, pid)
+                        .map_err(|error| RuntimeError::Cgroup(error).to_string())
+                        .and_then(|_| {
+                            self.cgroups
+                                .cgroup_path(&unit)
+                                .map_err(|error| RuntimeError::Cgroup(error).to_string())
+                        })
+                        .and_then(|path| {
+                            services
+                                .set_cgroup_path(&unit, path.display().to_string())
+                                .map_err(|error| error.to_string())
+                        })
+                        .and_then(|_| {
+                            services
+                                .mark_active(&unit, pid)
+                                .map_err(|error| error.to_string())
+                        });
+                    match attached {
+                        Ok(()) => Ok(format!("started {unit} as pid {pid}")),
+                        Err(error) => {
+                            let _ = services.mark_failed(&unit);
+                            Err(error)
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = services.mark_failed(&unit);
+                    Err(RuntimeError::Spawn(error).to_string())
+                }
+            };
+            results[index] = Some((unit, message));
+        }
+
+        results
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| {
+                result.unwrap_or_else(|| {
+                    (
+                        units[index].clone(),
+                        Err("internal error: missing batch start result".to_string()),
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
         if services.is_mount(unit).map_err(|err| err.to_string())? {
             let plan = services.plan_mount(unit).map_err(|err| err.to_string())?;
@@ -436,38 +553,82 @@ pub struct CommandSpawner;
 
 impl ProcessSpawner for CommandSpawner {
     fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError> {
-        let Some(program) = plan.argv.first() else {
-            return Err(SpawnError("empty argv".to_string()));
-        };
-        let mut command = std::process::Command::new(program);
-        command.args(&plan.argv[1..]);
-        if let Some(working_directory) = &plan.working_directory {
-            command.current_dir(working_directory);
-        }
-        command.env_clear();
-        for entry in &plan.environment {
-            if let Some((key, value)) = entry.split_once('=') {
-                command.env(key, value);
-            }
-        }
-        command.stdout(std::process::Stdio::piped());
-        command.stderr(std::process::Stdio::piped());
-        configure_child_security(
-            &mut command,
-            plan.no_new_privileges,
-            plan.user.as_deref(),
-            plan.group.as_deref(),
-        );
-        let mut child = command.spawn().map_err(|err| SpawnError(err.to_string()))?;
-        let pid = child.id();
-        if let Some(stdout) = child.stdout.take() {
-            tee_child_output(plan.unit.clone(), stdout, OutputStream::Stdout);
-        }
-        if let Some(stderr) = child.stderr.take() {
-            tee_child_output(plan.unit.clone(), stderr, OutputStream::Stderr);
-        }
-        Ok(pid)
+        spawn_command(plan.clone())
     }
+
+    fn spawn_batch(
+        &mut self,
+        plans: &[StartPlan],
+        max_parallel: usize,
+    ) -> Vec<(String, Result<u32, SpawnError>)> {
+        spawn_plans_with_limit(plans, max_parallel, spawn_command)
+    }
+}
+
+fn spawn_command(plan: StartPlan) -> Result<u32, SpawnError> {
+    let Some(program) = plan.argv.first() else {
+        return Err(SpawnError("empty argv".to_string()));
+    };
+    let mut command = std::process::Command::new(program);
+    command.args(&plan.argv[1..]);
+    if let Some(working_directory) = &plan.working_directory {
+        command.current_dir(working_directory);
+    }
+    command.env_clear();
+    for entry in &plan.environment {
+        if let Some((key, value)) = entry.split_once('=') {
+            command.env(key, value);
+        }
+    }
+    command.stdout(std::process::Stdio::piped());
+    command.stderr(std::process::Stdio::piped());
+    configure_child_security(
+        &mut command,
+        plan.no_new_privileges,
+        plan.user.as_deref(),
+        plan.group.as_deref(),
+    );
+    let mut child = command.spawn().map_err(|err| SpawnError(err.to_string()))?;
+    let pid = child.id();
+    if let Some(stdout) = child.stdout.take() {
+        tee_child_output(plan.unit.clone(), stdout, OutputStream::Stdout);
+    }
+    if let Some(stderr) = child.stderr.take() {
+        tee_child_output(plan.unit.clone(), stderr, OutputStream::Stderr);
+    }
+    Ok(pid)
+}
+
+fn spawn_plans_with_limit<F>(
+    plans: &[StartPlan],
+    max_parallel: usize,
+    spawn_one: F,
+) -> Vec<(String, Result<u32, SpawnError>)>
+where
+    F: Fn(StartPlan) -> Result<u32, SpawnError> + Clone + Send + 'static,
+{
+    let max_parallel = max_parallel.max(1);
+    let mut results = Vec::with_capacity(plans.len());
+    for chunk in plans.chunks(max_parallel) {
+        let handles = chunk
+            .iter()
+            .cloned()
+            .map(|plan| {
+                let unit = plan.unit.clone();
+                let spawn_one = spawn_one.clone();
+                std::thread::spawn(move || (unit, spawn_one(plan)))
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            results.push(handle.join().unwrap_or_else(|_| {
+                (
+                    "<unknown>".to_string(),
+                    Err(SpawnError("spawn worker panicked".to_string())),
+                )
+            }));
+        }
+    }
+    results
 }
 
 enum OutputStream {
@@ -614,6 +775,10 @@ mod tests {
     use minit_core::unit::parse_unit_toml;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     #[derive(Default)]
     struct FakeCgroupFs {
@@ -650,13 +815,35 @@ mod tests {
     #[derive(Default)]
     struct FakeSpawner {
         argv: Vec<Vec<String>>,
+        batch_max_parallel: Vec<usize>,
+        batch_units: Vec<Vec<String>>,
+        fail_units: BTreeSet<String>,
         next_pid: u32,
     }
 
     impl ProcessSpawner for FakeSpawner {
         fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError> {
             self.argv.push(plan.argv.clone());
-            Ok(self.next_pid)
+            if self.fail_units.contains(&plan.unit) {
+                return Err(SpawnError(format!("fake spawn failure for {}", plan.unit)));
+            }
+            let pid = self.next_pid;
+            self.next_pid += 1;
+            Ok(pid)
+        }
+
+        fn spawn_batch(
+            &mut self,
+            plans: &[StartPlan],
+            max_parallel: usize,
+        ) -> Vec<(String, Result<u32, SpawnError>)> {
+            self.batch_max_parallel.push(max_parallel);
+            self.batch_units
+                .push(plans.iter().map(|plan| plan.unit.clone()).collect());
+            plans
+                .iter()
+                .map(|plan| (plan.unit.clone(), self.spawn(plan)))
+                .collect()
         }
     }
 
@@ -750,6 +937,45 @@ start = ["/usr/bin/sshd", "-D"]
         manager
     }
 
+    fn test_start_plan(unit: &str) -> StartPlan {
+        StartPlan {
+            unit: unit.to_string(),
+            argv: vec!["/bin/true".to_string()],
+            working_directory: None,
+            no_new_privileges: false,
+            user: None,
+            group: None,
+            environment: Vec::new(),
+            resources: Default::default(),
+        }
+    }
+
+    #[test]
+    fn spawn_plans_with_limit_caps_concurrent_workers() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let active_for_spawn = Arc::clone(&active);
+        let max_seen_for_spawn = Arc::clone(&max_seen);
+        let plans = vec![
+            test_start_plan("a.service"),
+            test_start_plan("b.service"),
+            test_start_plan("c.service"),
+            test_start_plan("d.service"),
+        ];
+
+        let results = spawn_plans_with_limit(&plans, 2, move |_plan| {
+            let now_active = active_for_spawn.fetch_add(1, Ordering::SeqCst) + 1;
+            max_seen_for_spawn.fetch_max(now_active, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(40));
+            active_for_spawn.fetch_sub(1, Ordering::SeqCst);
+            Ok(42)
+        });
+
+        assert_eq!(results.len(), 4);
+        assert!(results.iter().all(|(_, result)| result == &Ok(42)));
+        assert_eq!(max_seen.load(Ordering::SeqCst), 2);
+    }
+
     #[test]
     fn start_service_creates_cgroup_spawns_attaches_and_marks_active() {
         let mut services = manager_with_sshd();
@@ -784,6 +1010,139 @@ start = ["/usr/bin/sshd", "-D"]
         let status = services.status(Some("sshd.service")).unwrap();
         assert_eq!(status[0].state, UnitState::Active);
         assert_eq!(status[0].main_pid, Some(321));
+    }
+
+    #[test]
+    fn service_runtime_start_batch_uses_bounded_spawner_and_preserves_ordered_state() {
+        let first = parse_unit_toml(
+            r#"
+[unit]
+name = "first.service"
+
+[exec]
+start = ["/bin/first"]
+"#,
+        )
+        .unwrap();
+        let second = parse_unit_toml(
+            r#"
+[unit]
+name = "second.service"
+
+[exec]
+start = ["/bin/second"]
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(first).unwrap();
+        services.add_unit(second).unwrap();
+        let mut runtime = ServiceRuntime::new(
+            CgroupManager::new("/sys/fs/cgroup/minit"),
+            FakeCgroupFs::default(),
+            FakeSpawner {
+                next_pid: 500,
+                ..FakeSpawner::default()
+            },
+        );
+
+        let results = runtime.start_batch(
+            &mut services,
+            &["first.service".to_string(), "second.service".to_string()],
+        );
+
+        assert_eq!(
+            results,
+            vec![
+                (
+                    "first.service".to_string(),
+                    Ok("started first.service as pid 500".to_string())
+                ),
+                (
+                    "second.service".to_string(),
+                    Ok("started second.service as pid 501".to_string())
+                ),
+            ]
+        );
+        assert_eq!(
+            runtime.spawner.batch_max_parallel,
+            vec![START_BATCH_MAX_PARALLEL]
+        );
+        assert_eq!(
+            runtime.spawner.batch_units,
+            vec![vec![
+                "first.service".to_string(),
+                "second.service".to_string()
+            ]]
+        );
+        let statuses = services.status(None).unwrap();
+        assert_eq!(statuses[0].unit, "first.service");
+        assert_eq!(statuses[0].state, UnitState::Active);
+        assert_eq!(statuses[0].main_pid, Some(500));
+        assert_eq!(statuses[1].unit, "second.service");
+        assert_eq!(statuses[1].state, UnitState::Active);
+        assert_eq!(statuses[1].main_pid, Some(501));
+    }
+
+    #[test]
+    fn service_runtime_start_batch_preserves_failure_order() {
+        let first = parse_unit_toml(
+            r#"
+[unit]
+name = "first.service"
+
+[exec]
+start = ["/bin/first"]
+"#,
+        )
+        .unwrap();
+        let second = parse_unit_toml(
+            r#"
+[unit]
+name = "second.service"
+
+[exec]
+start = ["/bin/second"]
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(first).unwrap();
+        services.add_unit(second).unwrap();
+        let mut runtime = ServiceRuntime::new(
+            CgroupManager::new("/sys/fs/cgroup/minit"),
+            FakeCgroupFs::default(),
+            FakeSpawner {
+                fail_units: BTreeSet::from(["second.service".to_string()]),
+                next_pid: 500,
+                ..FakeSpawner::default()
+            },
+        );
+
+        let results = runtime.start_batch(
+            &mut services,
+            &["first.service".to_string(), "second.service".to_string()],
+        );
+
+        assert_eq!(
+            results,
+            vec![
+                (
+                    "first.service".to_string(),
+                    Ok("started first.service as pid 500".to_string())
+                ),
+                (
+                    "second.service".to_string(),
+                    Err("spawn error: failed to spawn service process: fake spawn failure for second.service"
+                        .to_string())
+                ),
+            ]
+        );
+        let statuses = services.status(None).unwrap();
+        assert_eq!(statuses[0].unit, "first.service");
+        assert_eq!(statuses[0].state, UnitState::Active);
+        assert_eq!(statuses[1].unit, "second.service");
+        assert_eq!(statuses[1].state, UnitState::Failed);
     }
 
     #[test]
