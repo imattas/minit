@@ -30,6 +30,9 @@ pub enum Command {
     },
     Events,
     BootTimeline,
+    Logs {
+        unit: String,
+    },
     Start {
         unit: String,
     },
@@ -194,6 +197,7 @@ pub fn command_to_request(command: Command) -> ControlRequest {
         Command::Graph { unit, .. } => ControlRequest::Graph { unit },
         Command::Events => ControlRequest::Events,
         Command::BootTimeline => ControlRequest::BootTimeline,
+        Command::Logs { unit } => ControlRequest::Logs { unit },
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
         Command::Restart { unit } => ControlRequest::Restart { unit },
@@ -299,6 +303,16 @@ pub fn render_response(response: &ControlResponse) -> String {
                 output.push_str(&format!("event: {}\n", event.sequence));
                 output.push_str(&format!("scope: {}\n", event.scope));
                 output.push_str(&format!("message: {}\n", event.message));
+            }
+            output
+        }
+        ControlResponse::Logs { unit, lines } => {
+            if lines.is_empty() {
+                return format!("unit: {unit}\nno logs\n");
+            }
+            let mut output = format!("unit: {unit}\n");
+            for line in lines {
+                output.push_str(&format!("log: {line}\n"));
             }
             output
         }
@@ -433,6 +447,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_logs_command() {
+        let cli = Cli::parse_from(["minitctl", "logs", "sshd.service"]);
+
+        assert_eq!(
+            cli.command,
+            Command::Logs {
+                unit: "sshd.service".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn parses_lifecycle_commands() {
         assert_eq!(
             Cli::parse_from(["minitctl", "start", "sshd"]).command,
@@ -510,6 +536,14 @@ mod tests {
         assert_eq!(
             command_to_request(Command::BootTimeline),
             ControlRequest::BootTimeline
+        );
+        assert_eq!(
+            command_to_request(Command::Logs {
+                unit: "sshd.service".to_string()
+            }),
+            ControlRequest::Logs {
+                unit: "sshd.service".to_string()
+            }
         );
     }
 
@@ -668,6 +702,31 @@ mod tests {
         assert!(output.contains("event: 1"));
         assert!(output.contains("scope: boot"));
         assert!(output.contains("message: filesystems prepared"));
+    }
+
+    #[test]
+    fn renders_logs_response() {
+        let response = ControlResponse::Logs {
+            unit: "sshd.service".to_string(),
+            lines: vec!["#1 [control] started sshd.service as pid 42".to_string()],
+        };
+
+        let output = render_response(&response);
+
+        assert_eq!(
+            output,
+            "unit: sshd.service\nlog: #1 [control] started sshd.service as pid 42\n"
+        );
+    }
+
+    #[test]
+    fn renders_empty_logs_response() {
+        let response = ControlResponse::Logs {
+            unit: "sshd.service".to_string(),
+            lines: Vec::new(),
+        };
+
+        assert_eq!(render_response(&response), "unit: sshd.service\nno logs\n");
     }
 
     #[test]

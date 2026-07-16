@@ -99,9 +99,9 @@
 - Produces `ControlResponse::Logs { unit: String, lines: Vec<String> }`.
 - Produces `minitctl logs <unit>`.
 
-- [ ] Add failing IPC and CLI tests.
-- [ ] Start with a bounded in-memory message buffer, not persistent logging.
-- [ ] Include lifecycle messages now; process stdout/stderr capture can follow.
+- [x] Add failing IPC and CLI tests.
+- [x] Start with a bounded in-memory message buffer, not persistent logging.
+- [x] Include lifecycle messages now; process stdout/stderr capture can follow.
 
 ### Task 6: Distro/Profile and Recovery Docs
 

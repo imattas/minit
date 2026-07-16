@@ -146,6 +146,14 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectEventsUnit demo-sleep `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm logs smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectLogsUnit demo-sleep `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm graph smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

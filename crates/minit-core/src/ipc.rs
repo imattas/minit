@@ -12,6 +12,7 @@ pub enum ControlRequest {
     Graph { unit: String },
     Events,
     BootTimeline,
+    Logs { unit: String },
     Start { unit: String },
     Stop { unit: String },
     Restart { unit: String },
@@ -58,6 +59,10 @@ pub enum ControlResponse {
     },
     BootTimeline {
         events: Vec<crate::diagnostics::DiagnosticEvent>,
+    },
+    Logs {
+        unit: String,
+        lines: Vec<String>,
     },
     Accepted {
         message: String,
@@ -177,6 +182,26 @@ mod tests {
                 "boot",
                 "filesystems prepared",
             )],
+        };
+
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+        assert_eq!(
+            decode_response(&encode_response(&response).unwrap()).unwrap(),
+            response
+        );
+    }
+
+    #[test]
+    fn logs_request_and_response_round_trip() {
+        let request = ControlRequest::Logs {
+            unit: "sshd.service".to_string(),
+        };
+        let response = ControlResponse::Logs {
+            unit: "sshd.service".to_string(),
+            lines: vec!["#1 [control] started sshd.service as pid 42".to_string()],
         };
 
         assert_eq!(

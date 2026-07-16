@@ -143,6 +143,10 @@ impl<R: ControlRuntime> ControlService<R> {
             ControlRequest::BootTimeline => ControlResponse::BootTimeline {
                 events: self.boot_events.clone(),
             },
+            ControlRequest::Logs { unit } => ControlResponse::Logs {
+                lines: self.recent_logs_for_unit(&unit),
+                unit,
+            },
             ControlRequest::Start { unit } => match self.start_unit_or_target(&unit) {
                 Ok(message) => {
                     self.events.record("control", message.clone());
@@ -183,6 +187,15 @@ impl<R: ControlRuntime> ControlService<R> {
 
     pub fn shutdown(&mut self) -> Result<(), String> {
         self.runtime.shutdown(&mut self.services)
+    }
+
+    fn recent_logs_for_unit(&self, unit: &str) -> Vec<String> {
+        self.events
+            .recent()
+            .into_iter()
+            .filter(|event| event.message.contains(unit))
+            .map(|event| format!("#{} [{}] {}", event.sequence, event.scope, event.message))
+            .collect()
     }
 
     fn start_unit_or_target(&mut self, unit: &str) -> Result<String, String> {
@@ -284,6 +297,10 @@ pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
         },
         ControlRequest::Events => ControlResponse::Events { events: Vec::new() },
         ControlRequest::BootTimeline => ControlResponse::BootTimeline { events: Vec::new() },
+        ControlRequest::Logs { unit } => ControlResponse::Logs {
+            unit,
+            lines: Vec::new(),
+        },
         ControlRequest::Start { unit } => not_implemented("start", &unit),
         ControlRequest::Stop { unit } => not_implemented("stop", &unit),
         ControlRequest::Restart { unit } => not_implemented("restart", &unit),
@@ -625,6 +642,27 @@ start = ["/usr/bin/sshd", "-D"]
         assert_eq!(events[0].sequence, 1);
         assert_eq!(events[0].scope, "control");
         assert_eq!(events[0].message, "started sshd.service as pid 123");
+    }
+
+    #[test]
+    fn control_service_returns_recent_logs_for_unit() {
+        let mut service =
+            ControlService::with_runtime(service_manager_with_sshd(), FakeRuntime::default());
+
+        let _ = service.handle_request(ControlRequest::Start {
+            unit: "sshd.service".to_string(),
+        });
+        let response = service.handle_request(ControlRequest::Logs {
+            unit: "sshd.service".to_string(),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Logs {
+                unit: "sshd.service".to_string(),
+                lines: vec!["#1 [control] started sshd.service as pid 123".to_string()],
+            }
+        );
     }
 
     #[test]

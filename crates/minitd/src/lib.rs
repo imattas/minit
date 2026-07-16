@@ -31,6 +31,7 @@ pub struct NormalConfig {
     pub smoke_mount_failure_unit: Option<String>,
     pub smoke_shutdown_mount_unit: Option<String>,
     pub smoke_events_unit: Option<String>,
+    pub smoke_logs_unit: Option<String>,
     pub smoke_graph_unit: Option<String>,
     pub smoke_boot_timeline: bool,
     pub smoke_wanted_failure_target: Option<String>,
@@ -58,6 +59,7 @@ impl Default for NormalConfig {
             smoke_mount_failure_unit: None,
             smoke_shutdown_mount_unit: None,
             smoke_events_unit: None,
+            smoke_logs_unit: None,
             smoke_graph_unit: None,
             smoke_boot_timeline: false,
             smoke_wanted_failure_target: None,
@@ -249,6 +251,8 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_shutdown_mount_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_events=") {
             config.smoke_events_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_logs=") {
+            config.smoke_logs_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_graph=") {
             config.smoke_graph_unit = Some(value.to_string());
         } else if arg == "minit.smoke_boot_timeline=1" {
@@ -323,6 +327,9 @@ where
     }
     if arg_config.smoke_events_unit.is_some() {
         config.smoke_events_unit = arg_config.smoke_events_unit;
+    }
+    if arg_config.smoke_logs_unit.is_some() {
+        config.smoke_logs_unit = arg_config.smoke_logs_unit;
     }
     if arg_config.smoke_graph_unit.is_some() {
         config.smoke_graph_unit = arg_config.smoke_graph_unit;
@@ -577,6 +584,16 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} events"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_logs_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} logs {unit}"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_graph_unit {
             socket.max_requests = Some(1);
             let socket_path = socket.socket_path.display();
@@ -651,6 +668,7 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_mount_failure_unit.is_some()
                     || config.smoke_shutdown_mount_unit.is_some()
                     || config.smoke_events_unit.is_some()
+                    || config.smoke_logs_unit.is_some()
                     || config.smoke_graph_unit.is_some()
                     || config.smoke_boot_timeline
                     || config.smoke_long_running_unit.is_some())
@@ -838,6 +856,7 @@ mod tests {
         assert_eq!(config.smoke_mount_failure_unit.as_deref(), None);
         assert_eq!(config.smoke_shutdown_mount_unit.as_deref(), None);
         assert_eq!(config.smoke_events_unit.as_deref(), None);
+        assert_eq!(config.smoke_logs_unit.as_deref(), None);
         assert_eq!(config.smoke_graph_unit.as_deref(), None);
         assert!(!config.smoke_boot_timeline);
         assert_eq!(config.smoke_wanted_failure_target.as_deref(), None);
@@ -991,6 +1010,16 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.smoke_events_unit.as_deref(), Some("demo-sleep"));
+    }
+
+    #[test]
+    fn normal_config_parses_logs_smoke() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_logs=demo-sleep",
+        )
+        .unwrap();
+
+        assert_eq!(config.smoke_logs_unit.as_deref(), Some("demo-sleep"));
     }
 
     #[test]
