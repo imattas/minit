@@ -1,8 +1,10 @@
 use minit_core::ipc::{
     decode_request, encode_response, ControlRequest, ControlResponse, WireError,
+    DEFAULT_CONTROL_SOCKET,
 };
 use minit_core::manager::ServiceManager;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -13,6 +15,19 @@ pub enum ControlError {
     Response(WireError),
     #[error("control I/O failed: {0}")]
     Io(#[from] io::Error),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlSocketConfig {
+    pub socket_path: PathBuf,
+}
+
+impl Default for ControlSocketConfig {
+    fn default() -> Self {
+        Self {
+            socket_path: PathBuf::from(DEFAULT_CONTROL_SOCKET),
+        }
+    }
 }
 
 pub struct ControlService {
@@ -54,6 +69,15 @@ pub fn handle_control_line(line: &str) -> Result<String, ControlError> {
     encode_response(&response).map_err(ControlError::Response)
 }
 
+pub fn handle_control_line_with_service(
+    service: &mut ControlService,
+    line: &str,
+) -> Result<String, ControlError> {
+    let request = decode_request(line)?;
+    let response = service.handle_request(request);
+    encode_response(&response).map_err(ControlError::Response)
+}
+
 pub fn handle_control_io<R, W>(reader: &mut R, writer: &mut W) -> Result<(), ControlError>
 where
     R: BufRead,
@@ -65,6 +89,45 @@ where
     writer.write_all(response_line.as_bytes())?;
     writer.flush()?;
     Ok(())
+}
+
+pub fn handle_control_io_with_service<R, W>(
+    service: &mut ControlService,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<(), ControlError>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let response_line = handle_control_line_with_service(service, &line)?;
+    writer.write_all(response_line.as_bytes())?;
+    writer.flush()?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn run_control_socket_once(
+    config: &ControlSocketConfig,
+    service: &mut ControlService,
+) -> Result<(), ControlError> {
+    use std::io::BufReader;
+    use std::os::unix::net::UnixListener;
+
+    if let Some(parent) = config.socket_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if config.socket_path.exists() {
+        std::fs::remove_file(&config.socket_path)?;
+    }
+
+    let listener = UnixListener::bind(&config.socket_path)?;
+    let (stream, _) = listener.accept()?;
+    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut writer = stream;
+    handle_control_io_with_service(service, &mut reader, &mut writer)
 }
 
 fn not_implemented(command: &str, unit: &str) -> ControlResponse {
@@ -186,6 +249,16 @@ start = ["/usr/bin/sshd", "-D"]
             ControlResponse::Error {
                 message: "unit missing.service was not found".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn control_socket_config_uses_default_socket() {
+        let config = ControlSocketConfig::default();
+
+        assert_eq!(
+            config.socket_path,
+            std::path::PathBuf::from(minit_core::ipc::DEFAULT_CONTROL_SOCKET)
         );
     }
 }
