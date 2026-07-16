@@ -13,6 +13,7 @@ pub struct StartPlan {
     pub no_new_privileges: bool,
     pub user: Option<String>,
     pub group: Option<String>,
+    pub seccomp: Option<String>,
     pub environment: Vec<String>,
     pub resources: crate::unit::ResourceSection,
 }
@@ -329,6 +330,7 @@ impl ServiceManager {
             no_new_privileges: record.definition.security.no_new_privileges,
             user: record.definition.security.user.clone(),
             group: record.definition.security.group.clone(),
+            seccomp: record.definition.security.seccomp.clone(),
             environment: record.definition.security.environment.clone(),
             resources: record.definition.resources.clone(),
         })

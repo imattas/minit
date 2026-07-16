@@ -587,7 +587,9 @@ fn spawn_command(plan: StartPlan) -> Result<u32, SpawnError> {
         plan.no_new_privileges,
         plan.user.as_deref(),
         plan.group.as_deref(),
-    );
+        plan.seccomp.as_deref(),
+    )
+    .map_err(|err| SpawnError(err.to_string()))?;
     let mut child = command.spawn().map_err(|err| SpawnError(err.to_string()))?;
     let pid = child.id();
     if let Some(stdout) = child.stdout.take() {
@@ -725,12 +727,14 @@ fn configure_child_security(
     no_new_privileges: bool,
     user: Option<&str>,
     group: Option<&str>,
-) {
+    seccomp: Option<&str>,
+) -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
 
-    if no_new_privileges || user.is_some() || group.is_some() {
+    if no_new_privileges || user.is_some() || group.is_some() || seccomp.is_some() {
         let uid = user.and_then(parse_security_id);
         let gid = group.and_then(parse_security_id);
+        let seccomp = seccomp.map(str::to_string);
         unsafe {
             command.pre_exec(move || {
                 if let Some(gid) = gid {
@@ -749,10 +753,84 @@ fn configure_child_security(
                         return Err(std::io::Error::last_os_error());
                     }
                 }
+                if let Some(profile) = seccomp.as_deref() {
+                    install_seccomp_profile(profile)?;
+                }
                 Ok(())
             });
         }
     }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn install_seccomp_profile(profile: &str) -> std::io::Result<()> {
+    match profile {
+        "deny-write" => install_deny_write_seccomp(),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("unsupported seccomp profile {profile}"),
+        )),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_deny_write_seccomp() -> std::io::Result<()> {
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff0000;
+    const SECCOMP_RET_ERRNO: u32 = 0x00050000;
+    const BPF_LD: u16 = 0x00;
+    const BPF_W: u16 = 0x00;
+    const BPF_ABS: u16 = 0x20;
+    const BPF_JMP: u16 = 0x05;
+    const BPF_JEQ: u16 = 0x10;
+    const BPF_K: u16 = 0x00;
+    const BPF_RET: u16 = 0x06;
+
+    let mut filter = [
+        libc::sock_filter {
+            code: BPF_LD | BPF_W | BPF_ABS,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        },
+        libc::sock_filter {
+            code: BPF_JMP | BPF_JEQ | BPF_K,
+            jt: 0,
+            jf: 1,
+            k: libc::SYS_write as u32,
+        },
+        libc::sock_filter {
+            code: BPF_RET | BPF_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ERRNO | libc::EPERM as u32,
+        },
+        libc::sock_filter {
+            code: BPF_RET | BPF_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ALLOW,
+        },
+    ];
+    let mut program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+    let nnp = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if nnp != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let result = unsafe {
+        libc::prctl(
+            libc::PR_SET_SECCOMP,
+            libc::SECCOMP_MODE_FILTER,
+            &mut program as *mut libc::sock_fprog,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -761,7 +839,15 @@ fn configure_child_security(
     _no_new_privileges: bool,
     _user: Option<&str>,
     _group: Option<&str>,
-) {
+    seccomp: Option<&str>,
+) -> std::io::Result<()> {
+    if let Some(profile) = seccomp {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            format!("seccomp profile {profile} is only supported on Linux"),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -945,9 +1031,24 @@ start = ["/usr/bin/sshd", "-D"]
             no_new_privileges: false,
             user: None,
             group: None,
+            seccomp: None,
             environment: Vec::new(),
             resources: Default::default(),
         }
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn spawn_fails_closed_for_seccomp_off_linux() {
+        let mut plan = test_start_plan("seccomp.service");
+        plan.seccomp = Some("deny-write".to_string());
+
+        let error = spawn_command(plan).expect_err("seccomp must fail closed off Linux");
+
+        assert!(
+            error.0.contains("only supported on Linux"),
+            "unexpected error: {error:?}"
+        );
     }
 
     #[test]

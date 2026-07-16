@@ -28,6 +28,7 @@ param(
     [switch]$ExpectBootTimeline,
     [string]$ExpectLongRunningUnit,
     [string]$ExpectHardeningUnit,
+    [string]$ExpectSeccompUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -111,12 +112,15 @@ if ($ExpectLongRunningUnit) {
 if ($ExpectHardeningUnit) {
     $append = "$append minit.smoke_hardening=$ExpectHardeningUnit"
 }
+if ($ExpectSeccompUnit) {
+    $append = "$append minit.smoke_seccomp=$ExpectSeccompUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectParallelTarget <target>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectListUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectWantedFailureTarget <target>] [-ExpectRequiredFailureTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-ExpectEventsUnit <unit>] [-ExpectLogsUnit <unit>] [-ExpectLogsFollowUnit <unit>] [-ExpectGraphUnit <unit>] [-ExpectParallelTarget <target>] [-ExpectBootTimeline] [-ExpectLongRunningUnit <unit>] [-ExpectHardeningUnit <unit>] [-ExpectSeccompUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -292,6 +296,12 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectSeccompUnit) {
+                if ($output.Contains("accepted: started $ExpectSeccompUnit") -and $output.Contains("unit: $ExpectSeccompUnit") -and $output.Contains("state: failed") -and $output.Contains("seccomp-write-denied")) {
+                    Write-Output "Detected deny-write seccomp enforcement for $ExpectSeccompUnit; VM seccomp smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -304,7 +314,7 @@ try {
                     exit 0
                 }
             }
-            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectLogsUnit -and -not $ExpectLogsFollowUnit -and -not $ExpectGraphUnit -and -not $ExpectParallelTarget -and -not $ExpectBootTimeline -and -not $ExpectLongRunningUnit -and -not $ExpectHardeningUnit) {
+            if (-not $ExpectStatusUnit -and -not $ExpectListUnit -and -not $ExpectStartUnit -and -not $ExpectStopUnit -and -not $ExpectRestartUnit -and -not $ExpectCgroupCleanupUnit -and -not $ExpectRestartPolicyUnit -and -not $ExpectShutdownStopUnit -and -not $ExpectStuckStopUnit -and -not $ExpectShutdownStuckUnit -and -not $ExpectBootTarget -and -not $ExpectWantedFailureTarget -and -not $ExpectRequiredFailureTarget -and -not $ExpectMountUnit -and -not $ExpectMountFailureUnit -and -not $ExpectShutdownMountUnit -and -not $ExpectEventsUnit -and -not $ExpectLogsUnit -and -not $ExpectLogsFollowUnit -and -not $ExpectGraphUnit -and -not $ExpectParallelTarget -and -not $ExpectBootTimeline -and -not $ExpectLongRunningUnit -and -not $ExpectHardeningUnit -and -not $ExpectSeccompUnit) {
                 Write-Output "Detected minitd normal-mode control socket; VM normal smoke passed."
                 exit 0
             }
@@ -493,6 +503,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected hardening proof for $ExpectHardeningUnit was detected."
+        exit 5
+    }
+    if ($ExpectSeccompUnit) {
+        if ($output.Contains("accepted: started $ExpectSeccompUnit") -and $output.Contains("unit: $ExpectSeccompUnit") -and $output.Contains("state: failed") -and $output.Contains("seccomp-write-denied")) {
+            Write-Output "Detected deny-write seccomp enforcement for $ExpectSeccompUnit; VM seccomp smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected seccomp proof for $ExpectSeccompUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {

@@ -91,12 +91,12 @@
 - Adds a minimal seccomp profile option when supported.
 - Keeps unsupported security features fail-closed.
 
-- [ ] Add failing parser tests for a minimal deny-write seccomp profile.
-- [ ] Add failing runtime tests for unsupported seccomp configuration off Linux.
-- [ ] Implement Linux seccomp setup only where kernel/runtime support exists.
-- [ ] Add VM service proving denied syscall behavior.
-- [ ] Update security docs with exact supported and unsupported options.
-- [ ] Run focused tests, then full release gate, then commit and push.
+- [x] Add failing parser tests for a minimal deny-write seccomp profile.
+- [x] Add failing runtime tests for unsupported seccomp configuration off Linux.
+- [x] Implement Linux seccomp setup only where kernel/runtime support exists.
+- [x] Add VM service proving denied syscall behavior.
+- [x] Update security docs with exact supported and unsupported options.
+- [x] Run focused tests, then full release gate, then commit and push.
 
 ### Task 5: Distro Rootfs Validation Expansion
 

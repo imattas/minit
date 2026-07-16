@@ -40,6 +40,7 @@ pub struct NormalConfig {
     pub smoke_required_failure_target: Option<String>,
     pub smoke_long_running_unit: Option<String>,
     pub smoke_hardening_unit: Option<String>,
+    pub smoke_seccomp_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -71,6 +72,7 @@ impl Default for NormalConfig {
             smoke_required_failure_target: None,
             smoke_long_running_unit: None,
             smoke_hardening_unit: None,
+            smoke_seccomp_unit: None,
         }
     }
 }
@@ -275,6 +277,8 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_long_running_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_hardening=") {
             config.smoke_hardening_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_seccomp=") {
+            config.smoke_seccomp_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -366,6 +370,9 @@ where
     }
     if arg_config.smoke_hardening_unit.is_some() {
         config.smoke_hardening_unit = arg_config.smoke_hardening_unit;
+    }
+    if arg_config.smoke_seccomp_unit.is_some() {
+        config.smoke_seccomp_unit = arg_config.smoke_seccomp_unit;
     }
     Ok(config)
 }
@@ -674,6 +681,16 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/sleep 1; /bin/minitctl --socket {socket_path} status {unit}; echo control-socket-mode:$(/bin/busybox stat -c %a {socket_path})"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_seccomp_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/sleep 1; /bin/minitctl --socket {socket_path} status {unit}; if [ -e /run/minit/seccomp-deny-write.proof ]; then echo seccomp-write-created; else echo seccomp-write-denied; fi"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_list_unit {
             socket.max_requests = Some(1);
             let socket_path = socket.socket_path.display();
@@ -726,7 +743,8 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_parallel_target.is_some()
                     || config.smoke_boot_timeline
                     || config.smoke_long_running_unit.is_some()
-                    || config.smoke_hardening_unit.is_some())
+                    || config.smoke_hardening_unit.is_some()
+                    || config.smoke_seccomp_unit.is_some())
                     && std::process::id() == 1
                 {
                     if let Err(error) = service.shutdown() {
@@ -920,6 +938,7 @@ mod tests {
         assert_eq!(config.smoke_required_failure_target.as_deref(), None);
         assert_eq!(config.smoke_long_running_unit.as_deref(), None);
         assert_eq!(config.smoke_hardening_unit.as_deref(), None);
+        assert_eq!(config.smoke_seccomp_unit.as_deref(), None);
     }
 
     #[test]
@@ -1170,6 +1189,19 @@ mod tests {
         assert_eq!(
             config.smoke_hardening_unit.as_deref(),
             Some("hardening-check.service")
+        );
+    }
+
+    #[test]
+    fn normal_config_parses_seccomp_smoke() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_seccomp=seccomp-deny-write.service",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.smoke_seccomp_unit.as_deref(),
+            Some("seccomp-deny-write.service")
         );
     }
 }

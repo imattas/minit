@@ -97,6 +97,13 @@ impl UnitDefinition {
                 field: "security.readwrite_paths",
             });
         }
+        if let Some(seccomp_profile) = &self.security.seccomp {
+            if seccomp_profile != "deny-write" {
+                return Err(UnitValidationError::UnsupportedSecurityOption {
+                    field: "security.seccomp",
+                });
+            }
+        }
         for entry in &self.security.environment {
             validate_environment_entry(entry)?;
         }
@@ -305,6 +312,7 @@ fn parse_duration(value: &str) -> Option<Duration> {
 pub struct SecuritySection {
     pub user: Option<String>,
     pub group: Option<String>,
+    pub seccomp: Option<String>,
     #[serde(default)]
     pub no_new_privileges: bool,
     #[serde(default)]
@@ -566,6 +574,38 @@ start = ["/bin/true"]
     }
 
     #[test]
+    fn parses_supported_seccomp_profile() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "seccomp-deny-write.service"
+
+[exec]
+start = ["/bin/false"]
+
+[security]
+seccomp = "deny-write"
+"#,
+        )
+        .expect("unit should parse");
+
+        unit.validate().expect("deny-write seccomp should validate");
+        assert_eq!(unit.security.seccomp.as_deref(), Some("deny-write"));
+    }
+
+    #[test]
+    fn validation_rejects_unsupported_seccomp_profile() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.security.seccomp = Some("unknown".to_string());
+
+        let error = unit
+            .validate()
+            .expect_err("unsupported seccomp profile must fail closed");
+
+        assert_eq!(error.field(), "security.seccomp");
+    }
+
+    #[test]
     fn validation_rejects_invalid_environment_entries() {
         let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
         unit.security.environment = vec!["BAD-NAME=value".to_string()];
@@ -700,7 +740,7 @@ fstype = "tmpfs"
             parsed += 1;
         }
 
-        assert_eq!(parsed, 20);
+        assert_eq!(parsed, 21);
     }
 
     #[test]

@@ -1,0 +1,15 @@
+[unit]
+name = "seccomp-deny-write.service"
+description = "Proves the deny-write seccomp profile blocks write(2)"
+kind = "service"
+
+[exec]
+start = ["/bin/sh", "-c", "echo blocked"]
+working_directory = "/"
+
+[restart]
+policy = "never"
+
+[security]
+no_new_privileges = true
+seccomp = "deny-write"
