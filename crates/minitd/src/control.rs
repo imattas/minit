@@ -42,6 +42,10 @@ pub trait ControlRuntime {
         Ok(())
     }
 
+    fn shutdown(&mut self, _services: &mut ServiceManager) -> Result<(), String> {
+        Ok(())
+    }
+
     fn restart(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
         self.stop(services, unit)?;
         self.start(services, unit)
@@ -106,6 +110,10 @@ impl<R: ControlRuntime> ControlService<R> {
                 }
             }
         }
+    }
+
+    pub fn shutdown(&mut self) -> Result<(), String> {
+        self.runtime.shutdown(&mut self.services)
     }
 }
 

@@ -223,6 +223,16 @@ where
         }
         Ok(())
     }
+
+    fn shutdown(&mut self, services: &mut ServiceManager) -> Result<(), String> {
+        let units = services.active_unit_names();
+        for unit in units {
+            stop_service(services, &self.cgroups, &mut self.cgroup_fs, &unit)
+                .map_err(|err| err.to_string())?;
+            eprintln!("minitd: stopped {unit} for shutdown");
+        }
+        Ok(())
+    }
 }
 
 pub struct CommandSpawner;

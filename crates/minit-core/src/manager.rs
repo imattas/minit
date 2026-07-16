@@ -72,6 +72,15 @@ impl ServiceManager {
         }
     }
 
+    pub fn active_unit_names(&self) -> Vec<String> {
+        self.units
+            .iter()
+            .filter(|(_, record)| record.state == UnitState::Active)
+            .map(|(name, _)| name.clone())
+            .rev()
+            .collect()
+    }
+
     pub fn plan_start(&mut self, unit: &str) -> Result<StartPlan, ServiceManagerError> {
         self.plan_start_inner(unit, true)
     }
@@ -283,6 +292,24 @@ start = ["/usr/bin/sshd", "-D"]
 
         assert_eq!(statuses[0].state, UnitState::Failed);
         assert_eq!(statuses[0].main_pid, None);
+    }
+
+    #[test]
+    fn active_unit_names_returns_active_units_in_reverse_name_order() {
+        let mut manager = ServiceManager::new();
+        manager.add_unit(parsed_unit()).unwrap();
+        let mut second = parsed_unit();
+        second.unit.name = "z-last".to_string();
+        manager.add_unit(second).unwrap();
+        manager.plan_start("sshd").unwrap();
+        manager.mark_active("sshd", 123).unwrap();
+        manager.plan_start("z-last").unwrap();
+        manager.mark_active("z-last", 124).unwrap();
+
+        assert_eq!(
+            manager.active_unit_names(),
+            vec!["z-last".to_string(), "sshd".to_string()]
+        );
     }
 
     #[test]

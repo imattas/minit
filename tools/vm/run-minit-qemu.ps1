@@ -10,6 +10,7 @@ param(
     [string]$ExpectRestartUnit,
     [string]$ExpectCgroupCleanupUnit,
     [string]$ExpectRestartPolicyUnit,
+    [string]$ExpectShutdownStopUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -39,12 +40,15 @@ if ($ExpectCgroupCleanupUnit) {
 if ($ExpectRestartPolicyUnit) {
     $append = "$append minit.smoke_restart_policy=$ExpectRestartPolicyUnit"
 }
+if ($ExpectShutdownStopUnit) {
+    $append = "$append minit.smoke_shutdown_stop=$ExpectShutdownStopUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -118,6 +122,12 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectShutdownStopUnit) {
+                if ($output.Contains("unit: $ExpectShutdownStopUnit") -and $output.Contains("state: active") -and $output.Contains("minitd: stopped $ExpectShutdownStopUnit for shutdown")) {
+                    Write-Output "Detected managed service stop during shutdown for $ExpectShutdownStopUnit; VM shutdown-stop smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -176,6 +186,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected restart-policy proof for $ExpectRestartPolicyUnit was detected."
+        exit 5
+    }
+    if ($ExpectShutdownStopUnit) {
+        if ($output.Contains("unit: $ExpectShutdownStopUnit") -and $output.Contains("state: active") -and $output.Contains("minitd: stopped $ExpectShutdownStopUnit for shutdown")) {
+            Write-Output "Detected managed service stop during shutdown for $ExpectShutdownStopUnit; VM shutdown-stop smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected shutdown stop for $ExpectShutdownStopUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {
