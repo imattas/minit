@@ -6,7 +6,7 @@ use minit_core::ipc::{
 use minit_core::manager::ServiceManager;
 use std::collections::BTreeSet;
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -82,6 +82,7 @@ pub struct ControlService<R = DisabledRuntime> {
     runtime: R,
     events: EventBuffer,
     boot_events: Vec<DiagnosticEvent>,
+    log_dir: Option<PathBuf>,
 }
 
 impl ControlService<DisabledRuntime> {
@@ -91,6 +92,7 @@ impl ControlService<DisabledRuntime> {
             runtime: DisabledRuntime,
             events: EventBuffer::new(128),
             boot_events: Vec::new(),
+            log_dir: None,
         }
     }
 }
@@ -102,6 +104,7 @@ impl<R: ControlRuntime> ControlService<R> {
             runtime,
             events: EventBuffer::new(128),
             boot_events: Vec::new(),
+            log_dir: None,
         }
     }
 
@@ -115,7 +118,13 @@ impl<R: ControlRuntime> ControlService<R> {
             runtime,
             events: EventBuffer::new(128),
             boot_events,
+            log_dir: None,
         }
+    }
+
+    pub fn with_log_dir(mut self, log_dir: impl Into<PathBuf>) -> Self {
+        self.log_dir = Some(log_dir.into());
+        self
     }
 
     pub fn handle_request(&mut self, request: ControlRequest) -> ControlResponse {
@@ -154,41 +163,38 @@ impl<R: ControlRuntime> ControlService<R> {
             ControlRequest::BootTimeline => ControlResponse::BootTimeline {
                 events: self.boot_events.clone(),
             },
-            ControlRequest::Logs { unit } => ControlResponse::Logs {
+            ControlRequest::Logs { unit, .. } => ControlResponse::Logs {
                 lines: self.recent_logs_for_unit(&unit),
                 unit,
             },
             ControlRequest::Start { unit } => match self.start_unit_or_target(&unit) {
                 Ok(message) => {
-                    self.events.record("control", message.clone());
+                    self.record_event("control", message.clone());
                     ControlResponse::Accepted { message }
                 }
                 Err(message) => {
-                    self.events
-                        .record("control", format!("start failed: {message}"));
+                    self.record_event("control", format!("start failed: {message}"));
                     ControlResponse::Error { message }
                 }
             },
             ControlRequest::Stop { unit } => match self.runtime.stop(&mut self.services, &unit) {
                 Ok(message) => {
-                    self.events.record("control", message.clone());
+                    self.record_event("control", message.clone());
                     ControlResponse::Accepted { message }
                 }
                 Err(message) => {
-                    self.events
-                        .record("control", format!("stop failed: {message}"));
+                    self.record_event("control", format!("stop failed: {message}"));
                     ControlResponse::Error { message }
                 }
             },
             ControlRequest::Restart { unit } => {
                 match self.runtime.restart(&mut self.services, &unit) {
                     Ok(message) => {
-                        self.events.record("control", message.clone());
+                        self.record_event("control", message.clone());
                         ControlResponse::Accepted { message }
                     }
                     Err(message) => {
-                        self.events
-                            .record("control", format!("restart failed: {message}"));
+                        self.record_event("control", format!("restart failed: {message}"));
                         ControlResponse::Error { message }
                     }
                 }
@@ -201,12 +207,43 @@ impl<R: ControlRuntime> ControlService<R> {
     }
 
     fn recent_logs_for_unit(&self, unit: &str) -> Vec<String> {
-        self.events
+        let mut lines = self.persistent_logs_for_unit(unit);
+        let mut memory_lines: Vec<String> = self
+            .events
             .recent()
             .into_iter()
             .filter(|event| event.message.contains(unit))
             .map(|event| format!("#{} [{}] {}", event.sequence, event.scope, event.message))
-            .collect()
+            .collect();
+        lines.append(&mut memory_lines);
+        lines.sort();
+        lines.dedup();
+        lines
+    }
+
+    fn record_event(&mut self, scope: &str, message: String) {
+        let event = self.events.record(scope, message);
+        if let Some(log_dir) = &self.log_dir {
+            let _ = append_lifecycle_log(log_dir, &event);
+        }
+    }
+
+    fn persistent_logs_for_unit(&self, unit: &str) -> Vec<String> {
+        let Some(log_dir) = &self.log_dir else {
+            return Vec::new();
+        };
+        let path = log_dir.join("events.log");
+        let mut lines = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.contains(unit))
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        let output_path = log_dir.join(format!("{}.output.log", sanitize_log_unit(unit)));
+        if let Ok(contents) = std::fs::read_to_string(output_path) {
+            lines.extend(contents.lines().map(|line| format!("stdout: {line}")));
+        }
+        lines
     }
 
     fn start_unit_or_target(&mut self, unit: &str) -> Result<String, String> {
@@ -313,7 +350,7 @@ pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
         },
         ControlRequest::Events => ControlResponse::Events { events: Vec::new() },
         ControlRequest::BootTimeline => ControlResponse::BootTimeline { events: Vec::new() },
-        ControlRequest::Logs { unit } => ControlResponse::Logs {
+        ControlRequest::Logs { unit, .. } => ControlResponse::Logs {
             unit,
             lines: Vec::new(),
         },
@@ -321,6 +358,34 @@ pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
         ControlRequest::Stop { unit } => not_implemented("stop", &unit),
         ControlRequest::Restart { unit } => not_implemented("restart", &unit),
     }
+}
+
+fn append_lifecycle_log(log_dir: &Path, event: &DiagnosticEvent) -> io::Result<()> {
+    use std::io::Write as _;
+
+    std::fs::create_dir_all(log_dir)?;
+    let path = log_dir.join("events.log");
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(
+        file,
+        "#{} [{}] {}",
+        event.sequence, event.scope, event.message
+    )
+}
+
+fn sanitize_log_unit(unit: &str) -> String {
+    unit.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 pub fn handle_control_line(line: &str) -> Result<String, ControlError> {
@@ -683,6 +748,7 @@ start = ["/usr/bin/sshd", "-D"]
         });
         let response = service.handle_request(ControlRequest::Logs {
             unit: "sshd.service".to_string(),
+            follow: false,
         });
 
         assert_eq!(
@@ -692,6 +758,76 @@ start = ["/usr/bin/sshd", "-D"]
                 lines: vec!["#1 [control] started sshd.service as pid 123".to_string()],
             }
         );
+    }
+
+    #[test]
+    fn control_service_persists_lifecycle_logs_for_unit() {
+        let log_dir = std::env::temp_dir().join(format!(
+            "minit-control-logs-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut service =
+            ControlService::with_runtime(service_manager_with_sshd(), FakeRuntime::default())
+                .with_log_dir(&log_dir);
+
+        let _ = service.handle_request(ControlRequest::Start {
+            unit: "sshd.service".to_string(),
+        });
+        let response = service.handle_request(ControlRequest::Logs {
+            unit: "sshd.service".to_string(),
+            follow: false,
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Logs {
+                unit: "sshd.service".to_string(),
+                lines: vec!["#1 [control] started sshd.service as pid 123".to_string()],
+            }
+        );
+        let persisted = std::fs::read_to_string(log_dir.join("events.log")).unwrap();
+        assert!(persisted.contains("started sshd.service as pid 123"));
+        let _ = std::fs::remove_dir_all(log_dir);
+    }
+
+    #[test]
+    fn control_service_returns_persisted_process_output_logs_for_unit() {
+        let log_dir = std::env::temp_dir().join(format!(
+            "minit-control-output-logs-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&log_dir).unwrap();
+        std::fs::write(
+            log_dir.join("sshd.service.output.log"),
+            "ready\naccepted connection\n",
+        )
+        .unwrap();
+        let mut service =
+            ControlService::with_runtime(service_manager_with_sshd(), FakeRuntime::default())
+                .with_log_dir(&log_dir);
+
+        let response = service.handle_request(ControlRequest::Logs {
+            unit: "sshd.service".to_string(),
+            follow: false,
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Logs {
+                unit: "sshd.service".to_string(),
+                lines: vec![
+                    "stdout: accepted connection".to_string(),
+                    "stdout: ready".to_string(),
+                ],
+            }
+        );
+        let _ = std::fs::remove_dir_all(log_dir);
     }
 
     #[test]

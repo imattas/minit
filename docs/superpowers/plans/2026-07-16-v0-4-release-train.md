@@ -49,14 +49,14 @@
 - Extends `ControlRequest::Logs { unit, follow }`.
 - Keeps existing one-shot `minitctl logs <unit>` behavior.
 
-- [ ] Add failing IPC test for `Logs { unit, follow: true }`.
-- [ ] Add failing CLI parse test for `logs --follow demo-sleep`.
-- [ ] Add render/transport test proving follow mode polls without changing one-shot output.
-- [ ] Add bounded persistent log file storage under `/run/minit/logs` for lifecycle lines first.
-- [ ] Capture service stdout/stderr only after lifecycle file storage is stable.
-- [ ] Add VM smoke for one-shot persisted lifecycle logs.
-- [ ] Add VM smoke for bounded follow output with timeout.
-- [ ] Run focused tests, then full release gate, then commit and push.
+- [x] Add failing IPC test for `Logs { unit, follow: true }`.
+- [x] Add failing CLI parse test for `logs --follow demo-sleep`.
+- [x] Add render/transport test proving follow mode polls without changing one-shot output.
+- [x] Add bounded persistent log file storage under `/run/minit/logs` for lifecycle lines first.
+- [x] Capture service stdout/stderr only after lifecycle file storage is stable.
+- [x] Add VM smoke for one-shot persisted lifecycle logs.
+- [x] Add VM smoke for bounded follow output with timeout.
+- [x] Run focused tests, then full release gate, then commit and push.
 
 ### Task 3: Bounded Parallel Target Starts
 

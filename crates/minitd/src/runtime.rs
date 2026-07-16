@@ -450,15 +450,79 @@ impl ProcessSpawner for CommandSpawner {
                 command.env(key, value);
             }
         }
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
         configure_child_security(
             &mut command,
             plan.no_new_privileges,
             plan.user.as_deref(),
             plan.group.as_deref(),
         );
-        let child = command.spawn().map_err(|err| SpawnError(err.to_string()))?;
-        Ok(child.id())
+        let mut child = command.spawn().map_err(|err| SpawnError(err.to_string()))?;
+        let pid = child.id();
+        if let Some(stdout) = child.stdout.take() {
+            tee_child_output(plan.unit.clone(), stdout, OutputStream::Stdout);
+        }
+        if let Some(stderr) = child.stderr.take() {
+            tee_child_output(plan.unit.clone(), stderr, OutputStream::Stderr);
+        }
+        Ok(pid)
     }
+}
+
+enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+fn tee_child_output<R>(unit: String, mut reader: R, stream: OutputStream)
+where
+    R: std::io::Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let log_dir = std::path::Path::new("/run/minit/logs");
+        let _ = std::fs::create_dir_all(log_dir);
+        let log_path = log_dir.join(format!("{}.output.log", sanitize_log_unit(&unit)));
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .ok();
+        let mut buffer = [0u8; 4096];
+        loop {
+            let read = match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => read,
+                Err(_) => break,
+            };
+            if let Some(file) = file.as_mut() {
+                let _ = std::io::Write::write_all(file, &buffer[..read]);
+                let _ = std::io::Write::flush(file);
+            }
+            match stream {
+                OutputStream::Stdout => {
+                    let _ = std::io::Write::write_all(&mut std::io::stdout(), &buffer[..read]);
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                }
+                OutputStream::Stderr => {
+                    let _ = std::io::Write::write_all(&mut std::io::stderr(), &buffer[..read]);
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                }
+            }
+        }
+    });
+}
+
+fn sanitize_log_unit(unit: &str) -> String {
+    unit.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 pub struct SystemProcessSignaler;
@@ -1090,5 +1154,11 @@ required = false
         assert_eq!(parse_security_id("root"), Some(0));
         assert_eq!(parse_security_id("1000"), Some(1000));
         assert_eq!(parse_security_id("daemon"), None);
+    }
+
+    #[test]
+    fn log_unit_names_are_sanitized_for_paths() {
+        assert_eq!(sanitize_log_unit("sshd.service"), "sshd.service");
+        assert_eq!(sanitize_log_unit("../bad/unit"), ".._bad_unit");
     }
 }

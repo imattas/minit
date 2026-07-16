@@ -12,7 +12,7 @@ pub enum ControlRequest {
     Graph { unit: String },
     Events,
     BootTimeline,
-    Logs { unit: String },
+    Logs { unit: String, follow: bool },
     Start { unit: String },
     Stop { unit: String },
     Restart { unit: String },
@@ -198,6 +198,7 @@ mod tests {
     fn logs_request_and_response_round_trip() {
         let request = ControlRequest::Logs {
             unit: "sshd.service".to_string(),
+            follow: true,
         };
         let response = ControlResponse::Logs {
             unit: "sshd.service".to_string(),
@@ -211,6 +212,19 @@ mod tests {
         assert_eq!(
             decode_response(&encode_response(&response).unwrap()).unwrap(),
             response
+        );
+    }
+
+    #[test]
+    fn one_shot_logs_request_round_trips() {
+        let request = ControlRequest::Logs {
+            unit: "sshd.service".to_string(),
+            follow: false,
+        };
+
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
         );
     }
 

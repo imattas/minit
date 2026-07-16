@@ -31,6 +31,10 @@ pub enum Command {
     Events,
     BootTimeline,
     Logs {
+        #[arg(long)]
+        follow: bool,
+        #[arg(long, hide = true)]
+        max_polls: Option<usize>,
         unit: String,
     },
     Start {
@@ -90,6 +94,14 @@ pub fn control_socket_for_cli(cli: &Cli) -> &str {
 
 pub fn run_with_transport<T: ControlTransport>(cli: Cli, transport: &mut T) -> i32 {
     let command = cli.command;
+    if let Command::Logs {
+        follow: true,
+        max_polls,
+        unit,
+    } = &command
+    {
+        return run_follow_logs(transport, unit, *max_polls);
+    }
     let request = command_to_request(command.clone());
     match transport.round_trip(&request) {
         Ok(response) => {
@@ -197,10 +209,47 @@ pub fn command_to_request(command: Command) -> ControlRequest {
         Command::Graph { unit, .. } => ControlRequest::Graph { unit },
         Command::Events => ControlRequest::Events,
         Command::BootTimeline => ControlRequest::BootTimeline,
-        Command::Logs { unit } => ControlRequest::Logs { unit },
+        Command::Logs { unit, follow, .. } => ControlRequest::Logs { unit, follow },
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
         Command::Restart { unit } => ControlRequest::Restart { unit },
+    }
+}
+
+pub fn run_follow_logs<T: ControlTransport>(
+    transport: &mut T,
+    unit: &str,
+    max_polls: Option<usize>,
+) -> i32 {
+    let mut printed = std::collections::BTreeSet::new();
+    let mut polls = 0usize;
+    loop {
+        polls += 1;
+        match transport.round_trip(&ControlRequest::Logs {
+            unit: unit.to_string(),
+            follow: true,
+        }) {
+            Ok(ControlResponse::Logs { unit, lines }) => {
+                for line in lines {
+                    if printed.insert(line.clone()) {
+                        println!("unit: {unit}");
+                        println!("log: {line}");
+                    }
+                }
+            }
+            Ok(response) => {
+                print!("{}", render_response(&response));
+                return 0;
+            }
+            Err(err) => {
+                eprintln!("minitd unavailable: {err}");
+                return 1;
+            }
+        }
+        if max_polls.is_some_and(|max| polls >= max) {
+            return 0;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 }
 
@@ -453,6 +502,29 @@ mod tests {
         assert_eq!(
             cli.command,
             Command::Logs {
+                follow: false,
+                max_polls: None,
+                unit: "sshd.service".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_logs_follow_command() {
+        let cli = Cli::parse_from([
+            "minitctl",
+            "logs",
+            "--follow",
+            "--max-polls",
+            "1",
+            "sshd.service",
+        ]);
+
+        assert_eq!(
+            cli.command,
+            Command::Logs {
+                follow: true,
+                max_polls: Some(1),
                 unit: "sshd.service".to_string()
             }
         );
@@ -539,11 +611,42 @@ mod tests {
         );
         assert_eq!(
             command_to_request(Command::Logs {
+                follow: true,
+                max_polls: Some(1),
                 unit: "sshd.service".to_string()
             }),
             ControlRequest::Logs {
-                unit: "sshd.service".to_string()
+                unit: "sshd.service".to_string(),
+                follow: true,
             }
+        );
+    }
+
+    #[test]
+    fn follow_logs_polls_bounded_requests() {
+        let mut transport = MockTransport {
+            response: Some(ControlResponse::Logs {
+                unit: "sshd.service".to_string(),
+                lines: vec!["#1 [control] started sshd.service as pid 42".to_string()],
+            }),
+            ..MockTransport::default()
+        };
+
+        let code = run_follow_logs(&mut transport, "sshd.service", Some(2));
+
+        assert_eq!(code, 0);
+        assert_eq!(
+            transport.requests,
+            vec![
+                ControlRequest::Logs {
+                    unit: "sshd.service".to_string(),
+                    follow: true,
+                },
+                ControlRequest::Logs {
+                    unit: "sshd.service".to_string(),
+                    follow: true,
+                },
+            ]
         );
     }
 
