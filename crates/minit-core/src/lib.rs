@@ -1,3 +1,6 @@
+pub mod boot;
+pub mod diagnostics;
+
 pub const PROJECT_NAME: &str = "minit";
 
 #[cfg(test)]
