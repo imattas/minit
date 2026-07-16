@@ -13,7 +13,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-release.ps1 `
   -VmTimeoutSeconds 30
 ```
 
-The gate verifies formatting, unit tests, Linux builds, release packaging and checksums, initramfs generation, service lifecycle, restart policy, target boot, mount handling, events, long-running supervision, repeated boot/shutdown loops, stuck-process handling, and shutdown escalation.
+The gate verifies formatting, unit tests, Linux builds, release packaging and checksums, initramfs generation, service lifecycle, restart policy, target boot, required-vs-wanted dependency failure behavior, mount handling, events, recent lifecycle logs, graph output, boot timeline output, long-running supervision, repeated boot/shutdown loops, stuck-process handling, and shutdown escalation.
 
 For release-candidate stress validation, run the same gate with a longer boot loop:
 
@@ -59,5 +59,7 @@ Rollback path:
 - No device manager.
 - No journal replacement.
 - No user session manager.
+- Recent logs are a bounded in-memory lifecycle buffer, not persistent stdout/stderr capture.
+- `minitctl boot-timeline` reports current boot milestones, not per-unit startup duration analysis.
 - Security options fail closed unless explicitly implemented.
 - Broader distro install validation is still limited to the included VM profile and smokes.

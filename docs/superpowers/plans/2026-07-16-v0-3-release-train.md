@@ -114,9 +114,9 @@
 **Interfaces:**
 - Documents current Alpine/minimal profile limits and rollback.
 
-- [ ] Add tests if profile unit counts change.
-- [ ] Keep unsupported services explicit.
-- [ ] Do not claim full distro daily-driver readiness.
+- [x] Add tests if profile unit counts change.
+- [x] Keep unsupported services explicit.
+- [x] Do not claim full distro daily-driver readiness.
 
 ### Task 7: Hardening VM Proof
 
