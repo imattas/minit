@@ -13,6 +13,31 @@ pub struct UnitDefinition {
     pub security: SecuritySection,
 }
 
+impl UnitDefinition {
+    pub fn validate(&self) -> Result<(), UnitValidationError> {
+        if self.unit.name.trim().is_empty() {
+            return Err(UnitValidationError::EmptyField {
+                field: "unit.name",
+            });
+        }
+
+        let Some(program) = self.exec.start.first() else {
+            return Err(UnitValidationError::EmptyField {
+                field: "exec.start",
+            });
+        };
+
+        if !program.starts_with('/') {
+            return Err(UnitValidationError::NonAbsolutePath {
+                field: "exec.start[0]",
+                value: program.clone(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct UnitSection {
     pub name: String,
@@ -81,6 +106,23 @@ pub enum UnitParseError {
     Toml(#[from] toml::de::Error),
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum UnitValidationError {
+    #[error("{field} must not be empty")]
+    EmptyField { field: &'static str },
+    #[error("{field} must be an absolute path, got {value}")]
+    NonAbsolutePath { field: &'static str, value: String },
+}
+
+impl UnitValidationError {
+    pub fn field(&self) -> &'static str {
+        match self {
+            Self::EmptyField { field } => field,
+            Self::NonAbsolutePath { field, .. } => field,
+        }
+    }
+}
+
 pub fn parse_unit_toml(input: &str) -> Result<UnitDefinition, UnitParseError> {
     Ok(toml::from_str(input)?)
 }
@@ -135,5 +177,37 @@ environment = ["RUST_LOG=info"]
         assert_eq!(unit.restart.policy.as_deref(), Some("on-failure"));
         assert_eq!(unit.security.user.as_deref(), Some("root"));
         assert!(unit.security.no_new_privileges);
+    }
+
+    #[test]
+    fn validation_rejects_empty_unit_name() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.unit.name.clear();
+
+        let error = unit.validate().expect_err("empty unit name must fail");
+
+        assert_eq!(error.field(), "unit.name");
+    }
+
+    #[test]
+    fn validation_rejects_empty_start_command() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.exec.start.clear();
+
+        let error = unit.validate().expect_err("empty start command must fail");
+
+        assert_eq!(error.field(), "exec.start");
+    }
+
+    #[test]
+    fn validation_rejects_relative_start_program() {
+        let mut unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+        unit.exec.start[0] = "sshd".to_string();
+
+        let error = unit
+            .validate()
+            .expect_err("relative start program must fail");
+
+        assert_eq!(error.field(), "exec.start[0]");
     }
 }
