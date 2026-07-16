@@ -188,6 +188,7 @@ version = "0.2.0"
 dependencies = [
  "clap",
  "minit-core",
+ "serde_json",
  "thiserror",
 ]
 

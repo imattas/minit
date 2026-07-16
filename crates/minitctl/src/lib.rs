@@ -16,14 +16,28 @@ pub struct Cli {
 
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
-    Status { unit: Option<String> },
+    Status {
+        unit: Option<String>,
+    },
     List,
-    Explain { unit: String },
-    Graph { unit: String },
+    Explain {
+        unit: String,
+    },
+    Graph {
+        #[arg(long)]
+        json: bool,
+        unit: String,
+    },
     Events,
-    Start { unit: String },
-    Stop { unit: String },
-    Restart { unit: String },
+    Start {
+        unit: String,
+    },
+    Stop {
+        unit: String,
+    },
+    Restart {
+        unit: String,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -77,6 +91,7 @@ pub fn run_with_transport<T: ControlTransport>(cli: Cli, transport: &mut T) -> i
         Ok(response) => {
             let output = match command {
                 Command::List => render_list_response(&response),
+                Command::Graph { json: true, .. } => render_graph_json_response(&response),
                 _ => render_response(&response),
             };
             print!("{output}");
@@ -175,7 +190,7 @@ pub fn command_to_request(command: Command) -> ControlRequest {
         Command::Status { unit } => ControlRequest::Status { unit },
         Command::List => ControlRequest::List,
         Command::Explain { unit } => ControlRequest::Explain { unit },
-        Command::Graph { unit } => ControlRequest::Graph { unit },
+        Command::Graph { unit, .. } => ControlRequest::Graph { unit },
         Command::Events => ControlRequest::Events,
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
@@ -205,6 +220,21 @@ pub fn render_list_response(response: &ControlResponse) -> String {
                     description
                 ));
             }
+            output
+        }
+        other => render_response(other),
+    }
+}
+
+pub fn render_graph_json_response(response: &ControlResponse) -> String {
+    match response {
+        ControlResponse::Graph { unit, batches } => {
+            let mut output = serde_json::json!({
+                "unit": unit,
+                "batches": batches,
+            })
+            .to_string();
+            output.push('\n');
             output
         }
         other => render_response(other),
@@ -367,6 +397,20 @@ mod tests {
         assert_eq!(
             cli.command,
             Command::Graph {
+                json: false,
+                unit: "multi-user.target".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_graph_json_command() {
+        let cli = Cli::parse_from(["minitctl", "graph", "--json", "multi-user.target"]);
+
+        assert_eq!(
+            cli.command,
+            Command::Graph {
+                json: true,
                 unit: "multi-user.target".to_string()
             }
         );
@@ -446,6 +490,7 @@ mod tests {
         );
         assert_eq!(
             command_to_request(Command::Graph {
+                json: true,
                 unit: "multi-user.target".to_string()
             }),
             ControlRequest::Graph {
@@ -556,6 +601,26 @@ mod tests {
             render_response(&response),
             "unit: multi-user.target\nbatch 1: network.service, demo-sleep\nbatch 2: multi-user.target\n"
         );
+    }
+
+    #[test]
+    fn renders_graph_response_as_json() {
+        let response = ControlResponse::Graph {
+            unit: "multi-user.target".to_string(),
+            batches: vec![
+                vec!["network.service".to_string(), "demo-sleep".to_string()],
+                vec!["multi-user.target".to_string()],
+            ],
+        };
+
+        let output = render_graph_json_response(&response);
+        let json: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(json["unit"], "multi-user.target");
+        assert_eq!(json["batches"][0][0], "network.service");
+        assert_eq!(json["batches"][0][1], "demo-sleep");
+        assert_eq!(json["batches"][1][0], "multi-user.target");
+        assert!(output.ends_with('\n'));
     }
 
     #[test]

@@ -8,4 +8,5 @@ repository.workspace = true
 [dependencies]
 clap.workspace = true
 minit-core.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true

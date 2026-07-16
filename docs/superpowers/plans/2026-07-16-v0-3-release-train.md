@@ -33,12 +33,12 @@
 - Produces kernel args `minit.smoke_wanted_failure=<target>` and `minit.smoke_required_failure=<target>`.
 - Produces VM harness flags `-ExpectWantedFailureTarget` and `-ExpectRequiredFailureTarget`.
 
-- [ ] Add failing config parsing tests for both new smoke args.
-- [ ] Add failing QEMU harness expectations for wanted and required target failure behavior.
-- [ ] Add example units that intentionally fail with `/bin/sh -c exit 1`.
-- [ ] Wire startup commands that start the target and query target plus failed service status.
-- [ ] Add both VM smokes to `tools\verify-release.ps1`.
-- [ ] Run focused tests, then full release gate.
+- [x] Add failing config parsing tests for both new smoke args.
+- [x] Add failing QEMU harness expectations for wanted and required target failure behavior.
+- [x] Add example units that intentionally fail.
+- [x] Wire startup commands that start the target and query target plus failed service status.
+- [x] Add both VM smokes to `tools\verify-release.ps1`.
+- [x] Run focused tests, then full release gate.
 
 ### Task 2: Machine-Readable Graph Output
 
@@ -48,10 +48,10 @@
 **Interfaces:**
 - Produces `minitctl graph --json <unit>`.
 
-- [ ] Add failing CLI parse test for `graph --json multi-user.target`.
-- [ ] Add failing render test expecting JSON with `unit` and `batches`.
-- [ ] Implement output mode on graph command only.
-- [ ] Run `cargo test -p minitctl graph`.
+- [x] Add failing CLI parse test for `graph --json multi-user.target`.
+- [x] Add failing render test expecting JSON with `unit` and `batches`.
+- [x] Implement output mode on graph command only.
+- [x] Run `cargo test -p minitctl graph`.
 
 ### Task 3: Boot Timeline Command
 
