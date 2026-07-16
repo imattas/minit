@@ -1,5 +1,6 @@
 pub mod boot;
 pub mod diagnostics;
+pub mod graph;
 pub mod ipc;
 pub mod manager;
 pub mod unit;
