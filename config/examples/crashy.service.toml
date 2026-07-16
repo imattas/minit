@@ -1,0 +1,17 @@
+[unit]
+name = "crashy"
+description = "VM smoke crash service"
+kind = "service"
+
+[exec]
+start = ["/bin/sh", "-c", "exit 1"]
+working_directory = "/"
+
+[restart]
+policy = "on-failure"
+limit = "1/min"
+
+[security]
+user = "root"
+group = "root"
+no_new_privileges = true

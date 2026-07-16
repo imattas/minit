@@ -9,6 +9,7 @@ param(
     [string]$ExpectStopUnit,
     [string]$ExpectRestartUnit,
     [string]$ExpectCgroupCleanupUnit,
+    [string]$ExpectRestartPolicyUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -35,12 +36,15 @@ if ($ExpectRestartUnit) {
 if ($ExpectCgroupCleanupUnit) {
     $append = "$append minit.smoke_cgroup_cleanup=$ExpectCgroupCleanupUnit"
 }
+if ($ExpectRestartPolicyUnit) {
+    $append = "$append minit.smoke_restart_policy=$ExpectRestartPolicyUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -108,6 +112,12 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectRestartPolicyUnit) {
+                if ($output.Contains("minitd: restarted $ExpectRestartPolicyUnit after pid") -and $output.Contains("unit: $ExpectRestartPolicyUnit") -and $output.Contains("state: active")) {
+                    Write-Output "Detected automatic restart policy for $ExpectRestartPolicyUnit; VM restart-policy smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -158,6 +168,14 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected cgroup cleanup for $ExpectCgroupCleanupUnit was detected."
+        exit 5
+    }
+    if ($ExpectRestartPolicyUnit) {
+        if ($output.Contains("minitd: restarted $ExpectRestartPolicyUnit after pid") -and $output.Contains("unit: $ExpectRestartPolicyUnit") -and $output.Contains("state: active")) {
+            Write-Output "Detected automatic restart policy for $ExpectRestartPolicyUnit; VM restart-policy smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected restart-policy proof for $ExpectRestartPolicyUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {

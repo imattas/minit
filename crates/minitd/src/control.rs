@@ -38,6 +38,10 @@ pub trait ControlRuntime {
     fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String>;
     fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String>;
 
+    fn reap(&mut self, _services: &mut ServiceManager) -> Result<(), String> {
+        Ok(())
+    }
+
     fn restart(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
         self.stop(services, unit)?;
         self.start(services, unit)
@@ -76,6 +80,10 @@ impl<R: ControlRuntime> ControlService<R> {
     }
 
     pub fn handle_request(&mut self, request: ControlRequest) -> ControlResponse {
+        if let Err(message) = self.runtime.reap(&mut self.services) {
+            return ControlResponse::Error { message };
+        }
+
         match request {
             ControlRequest::Status { unit } => match self.services.status(unit.as_deref()) {
                 Ok(units) => ControlResponse::Status { units },

@@ -1,11 +1,21 @@
 use crate::cgroups::{CgroupError, CgroupFs, CgroupManager};
 use crate::control::ControlRuntime;
+use crate::reaper::{drain_reap_events, ReapStatus, Reaper};
 use minit_core::manager::{ServiceManager, ServiceManagerError};
 use std::time::Duration;
 use thiserror::Error;
 
 pub trait ProcessSpawner {
     fn spawn(&mut self, argv: &[String]) -> Result<u32, SpawnError>;
+}
+
+#[derive(Default)]
+pub struct NoopReaper;
+
+impl Reaper for NoopReaper {
+    fn reap_once(&mut self) -> Result<Option<crate::reaper::ReapEvent>, crate::reaper::ReapError> {
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -35,7 +45,40 @@ where
     F: CgroupFs,
     P: ProcessSpawner,
 {
-    let plan = services.plan_start(unit)?;
+    start_service_inner(services, cgroups, cgroup_fs, spawner, unit, false)
+}
+
+fn restart_service<F, P>(
+    services: &mut ServiceManager,
+    cgroups: &CgroupManager,
+    cgroup_fs: &mut F,
+    spawner: &mut P,
+    unit: &str,
+) -> Result<u32, RuntimeError>
+where
+    F: CgroupFs,
+    P: ProcessSpawner,
+{
+    start_service_inner(services, cgroups, cgroup_fs, spawner, unit, true)
+}
+
+fn start_service_inner<F, P>(
+    services: &mut ServiceManager,
+    cgroups: &CgroupManager,
+    cgroup_fs: &mut F,
+    spawner: &mut P,
+    unit: &str,
+    is_restart: bool,
+) -> Result<u32, RuntimeError>
+where
+    F: CgroupFs,
+    P: ProcessSpawner,
+{
+    let plan = if is_restart {
+        services.plan_restart(unit)?
+    } else {
+        services.plan_start(unit)?
+    };
 
     if let Err(error) = cgroups.create_unit(cgroup_fs, unit) {
         let _ = services.mark_failed(unit);
@@ -94,26 +137,40 @@ where
     Err(RuntimeError::CgroupStillPopulated(unit.to_string()))
 }
 
-pub struct ServiceRuntime<F, P> {
+pub struct ServiceRuntime<F, P, R = NoopReaper> {
     cgroups: CgroupManager,
     cgroup_fs: F,
     spawner: P,
+    reaper: R,
 }
 
-impl<F, P> ServiceRuntime<F, P> {
+impl<F, P> ServiceRuntime<F, P, NoopReaper> {
     pub fn new(cgroups: CgroupManager, cgroup_fs: F, spawner: P) -> Self {
         Self {
             cgroups,
             cgroup_fs,
             spawner,
+            reaper: NoopReaper,
         }
     }
 }
 
-impl<F, P> ControlRuntime for ServiceRuntime<F, P>
+impl<F, P, R> ServiceRuntime<F, P, R> {
+    pub fn with_reaper(cgroups: CgroupManager, cgroup_fs: F, spawner: P, reaper: R) -> Self {
+        Self {
+            cgroups,
+            cgroup_fs,
+            spawner,
+            reaper,
+        }
+    }
+}
+
+impl<F, P, R> ControlRuntime for ServiceRuntime<F, P, R>
 where
     F: CgroupFs,
     P: ProcessSpawner,
+    R: Reaper,
 {
     fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
         let pid = start_service(
@@ -131,6 +188,40 @@ where
         stop_service(services, &self.cgroups, &mut self.cgroup_fs, unit)
             .map_err(|err| err.to_string())?;
         Ok(format!("stopped {unit}"))
+    }
+
+    fn reap(&mut self, services: &mut ServiceManager) -> Result<(), String> {
+        let events = drain_reap_events(&mut self.reaper).map_err(|err| err.to_string())?;
+        for event in events {
+            let successful = matches!(event.status, ReapStatus::Exited(0));
+            let Some(decision) = services
+                .record_exit(event.pid as u32, successful)
+                .map_err(|err| err.to_string())?
+            else {
+                continue;
+            };
+
+            let _ = wait_until_cgroup_empty(&self.cgroups, &mut self.cgroup_fs, &decision.unit);
+            let _ = self
+                .cgroups
+                .remove_unit(&mut self.cgroup_fs, &decision.unit);
+
+            if decision.restart {
+                let new_pid = restart_service(
+                    services,
+                    &self.cgroups,
+                    &mut self.cgroup_fs,
+                    &mut self.spawner,
+                    &decision.unit,
+                )
+                .map_err(|err| err.to_string())?;
+                eprintln!(
+                    "minitd: restarted {} after pid {} exit as pid {}",
+                    decision.unit, event.pid, new_pid
+                );
+            }
+        }
+        Ok(())
     }
 }
 

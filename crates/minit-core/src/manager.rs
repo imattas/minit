@@ -1,5 +1,5 @@
 use crate::ipc::{UnitState, UnitStatus};
-use crate::unit::{UnitDefinition, UnitValidationError};
+use crate::unit::{RestartPolicy, UnitDefinition, UnitValidationError};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
@@ -10,10 +10,17 @@ pub struct StartPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestartDecision {
+    pub unit: String,
+    pub restart: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceRecord {
     pub definition: UnitDefinition,
     pub state: UnitState,
     pub main_pid: Option<u32>,
+    pub restart_attempts: u32,
 }
 
 #[derive(Debug, Default)]
@@ -49,6 +56,7 @@ impl ServiceManager {
                 definition,
                 state: UnitState::Inactive,
                 main_pid: None,
+                restart_attempts: 0,
             },
         );
         Ok(())
@@ -65,9 +73,24 @@ impl ServiceManager {
     }
 
     pub fn plan_start(&mut self, unit: &str) -> Result<StartPlan, ServiceManagerError> {
+        self.plan_start_inner(unit, true)
+    }
+
+    pub fn plan_restart(&mut self, unit: &str) -> Result<StartPlan, ServiceManagerError> {
+        self.plan_start_inner(unit, false)
+    }
+
+    fn plan_start_inner(
+        &mut self,
+        unit: &str,
+        reset_restart_attempts: bool,
+    ) -> Result<StartPlan, ServiceManagerError> {
         let record = self.record_mut(unit)?;
         record.state = UnitState::Starting;
         record.main_pid = None;
+        if reset_restart_attempts {
+            record.restart_attempts = 0;
+        }
         Ok(StartPlan {
             unit: unit.to_string(),
             argv: record.definition.exec.start.clone(),
@@ -79,6 +102,50 @@ impl ServiceManager {
         record.state = UnitState::Active;
         record.main_pid = Some(main_pid);
         Ok(())
+    }
+
+    pub fn record_exit(
+        &mut self,
+        pid: u32,
+        successful: bool,
+    ) -> Result<Option<RestartDecision>, ServiceManagerError> {
+        let Some((unit, record)) = self
+            .units
+            .iter_mut()
+            .find(|(_, record)| record.main_pid == Some(pid))
+        else {
+            return Ok(None);
+        };
+
+        record.main_pid = None;
+        let should_restart = match record.definition.restart.policy() {
+            RestartPolicy::Never => false,
+            RestartPolicy::Always => true,
+            RestartPolicy::OnFailure => !successful,
+        };
+        let under_limit = record
+            .definition
+            .restart
+            .limit_count()
+            .is_none_or(|limit| record.restart_attempts < limit);
+
+        if should_restart && under_limit {
+            record.restart_attempts += 1;
+            record.state = UnitState::Starting;
+            Ok(Some(RestartDecision {
+                unit: unit.clone(),
+                restart: true,
+            }))
+        } else {
+            record.state = match successful {
+                true => UnitState::Inactive,
+                false => UnitState::Failed,
+            };
+            Ok(Some(RestartDecision {
+                unit: unit.clone(),
+                restart: false,
+            }))
+        }
     }
 
     pub fn mark_inactive(&mut self, unit: &str) -> Result<(), ServiceManagerError> {
@@ -216,5 +283,76 @@ start = ["/usr/bin/sshd", "-D"]
 
         assert_eq!(statuses[0].state, UnitState::Failed);
         assert_eq!(statuses[0].main_pid, None);
+    }
+
+    #[test]
+    fn record_exit_restarts_on_failure_within_limit() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+limit = "2/min"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+        manager.plan_start("crashy").unwrap();
+        manager.mark_active("crashy", 42).unwrap();
+
+        let decision = manager.record_exit(42, false).unwrap().unwrap();
+
+        assert_eq!(
+            decision,
+            RestartDecision {
+                unit: "crashy".to_string(),
+                restart: true,
+            }
+        );
+        let statuses = manager.status(Some("crashy")).unwrap();
+        assert_eq!(statuses[0].state, UnitState::Starting);
+    }
+
+    #[test]
+    fn record_exit_marks_failed_after_restart_limit() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+limit = "1/min"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+        manager.plan_start("crashy").unwrap();
+        manager.mark_active("crashy", 42).unwrap();
+        assert!(manager.record_exit(42, false).unwrap().unwrap().restart);
+        manager.plan_restart("crashy").unwrap();
+        manager.mark_active("crashy", 43).unwrap();
+
+        let decision = manager.record_exit(43, false).unwrap().unwrap();
+
+        assert_eq!(
+            decision,
+            RestartDecision {
+                unit: "crashy".to_string(),
+                restart: false,
+            }
+        );
+        let statuses = manager.status(Some("crashy")).unwrap();
+        assert_eq!(statuses[0].state, UnitState::Failed);
     }
 }

@@ -82,6 +82,34 @@ pub struct RestartSection {
     pub max_delay: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestartPolicy {
+    Never,
+    Always,
+    OnFailure,
+}
+
+impl RestartSection {
+    pub fn policy(&self) -> RestartPolicy {
+        match self.policy.as_deref() {
+            Some("always") => RestartPolicy::Always,
+            Some("on-failure") => RestartPolicy::OnFailure,
+            _ => RestartPolicy::Never,
+        }
+    }
+
+    pub fn limit_count(&self) -> Option<u32> {
+        self.limit
+            .as_deref()
+            .and_then(|limit| {
+                limit
+                    .split_once('/')
+                    .map_or(Some(limit), |(count, _)| Some(count))
+            })
+            .and_then(|count| count.parse::<u32>().ok())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct SecuritySection {
     pub user: Option<String>,
@@ -173,8 +201,19 @@ environment = ["RUST_LOG=info"]
         assert_eq!(unit.exec.start, vec!["/usr/bin/sshd", "-D"]);
         assert_eq!(unit.dependencies.after, vec!["network-online.target"]);
         assert_eq!(unit.restart.policy.as_deref(), Some("on-failure"));
+        assert_eq!(unit.restart.policy(), RestartPolicy::OnFailure);
+        assert_eq!(unit.restart.limit_count(), Some(5));
         assert_eq!(unit.security.user.as_deref(), Some("root"));
         assert!(unit.security.no_new_privileges);
+    }
+
+    #[test]
+    fn restart_policy_defaults_to_never() {
+        let unit = parse_unit_toml(SSHD_SERVICE).expect("unit should parse");
+
+        assert_eq!(RestartSection::default().policy(), RestartPolicy::Never);
+        assert_eq!(RestartSection::default().limit_count(), None);
+        assert_eq!(unit.restart.limit_count(), Some(5));
     }
 
     #[test]
@@ -228,6 +267,6 @@ environment = ["RUST_LOG=info"]
             parsed += 1;
         }
 
-        assert_eq!(parsed, 4);
+        assert_eq!(parsed, 5);
     }
 }
