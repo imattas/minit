@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use thiserror::Error;
 
 pub const DEFAULT_CONTROL_SOCKET: &str = "/run/minit/minitd.sock";
 
@@ -38,6 +39,51 @@ pub enum ControlResponse {
     Error { message: String },
 }
 
+#[derive(Debug, Error)]
+pub enum WireError {
+    #[error("control message is empty")]
+    Empty,
+    #[error("control message is missing trailing newline")]
+    MissingNewline,
+    #[error("invalid control message: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
+pub fn encode_request(request: &ControlRequest) -> Result<String, WireError> {
+    encode_json_line(request)
+}
+
+pub fn decode_request(line: &str) -> Result<ControlRequest, WireError> {
+    decode_json_line(line)
+}
+
+pub fn encode_response(response: &ControlResponse) -> Result<String, WireError> {
+    encode_json_line(response)
+}
+
+pub fn decode_response(line: &str) -> Result<ControlResponse, WireError> {
+    decode_json_line(line)
+}
+
+fn encode_json_line<T: Serialize>(value: &T) -> Result<String, WireError> {
+    let mut line = serde_json::to_string(value)?;
+    line.push('\n');
+    Ok(line)
+}
+
+fn decode_json_line<T: DeserializeOwned>(line: &str) -> Result<T, WireError> {
+    if line.is_empty() {
+        return Err(WireError::Empty);
+    }
+    let Some(payload) = line.strip_suffix('\n') else {
+        return Err(WireError::MissingNewline);
+    };
+    if payload.is_empty() {
+        return Err(WireError::Empty);
+    }
+    Ok(serde_json::from_str(payload)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +114,43 @@ mod tests {
         let parsed: ControlResponse = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed, response);
+    }
+
+    #[test]
+    fn request_wire_messages_are_newline_delimited() {
+        let request = ControlRequest::Stop {
+            unit: "sshd".to_string(),
+        };
+
+        let line = encode_request(&request).unwrap();
+
+        assert!(line.ends_with('\n'));
+        assert_eq!(decode_request(&line).unwrap(), request);
+    }
+
+    #[test]
+    fn response_wire_messages_are_newline_delimited() {
+        let response = ControlResponse::Accepted {
+            message: "queued start for sshd".to_string(),
+        };
+
+        let line = encode_response(&response).unwrap();
+
+        assert!(line.ends_with('\n'));
+        assert_eq!(decode_response(&line).unwrap(), response);
+    }
+
+    #[test]
+    fn wire_decode_rejects_missing_newline() {
+        let err = decode_request(r#"{"type":"status","unit":null}"#).unwrap_err();
+
+        assert!(matches!(err, WireError::MissingNewline));
+    }
+
+    #[test]
+    fn wire_decode_rejects_empty_message() {
+        let err = decode_request("").unwrap_err();
+
+        assert!(matches!(err, WireError::Empty));
     }
 }
