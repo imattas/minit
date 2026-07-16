@@ -1,6 +1,7 @@
 use minit_core::ipc::{
     decode_request, encode_response, ControlRequest, ControlResponse, WireError,
 };
+use minit_core::manager::ServiceManager;
 use std::io::{self, BufRead, Write};
 use thiserror::Error;
 
@@ -12,6 +13,30 @@ pub enum ControlError {
     Response(WireError),
     #[error("control I/O failed: {0}")]
     Io(#[from] io::Error),
+}
+
+pub struct ControlService {
+    services: ServiceManager,
+}
+
+impl ControlService {
+    pub fn new(services: ServiceManager) -> Self {
+        Self { services }
+    }
+
+    pub fn handle_request(&mut self, request: ControlRequest) -> ControlResponse {
+        match request {
+            ControlRequest::Status { unit } => match self.services.status(unit.as_deref()) {
+                Ok(units) => ControlResponse::Status { units },
+                Err(error) => ControlResponse::Error {
+                    message: error.to_string(),
+                },
+            },
+            ControlRequest::Start { unit } => not_implemented("start", &unit),
+            ControlRequest::Stop { unit } => not_implemented("stop", &unit),
+            ControlRequest::Restart { unit } => not_implemented("restart", &unit),
+        }
+    }
 }
 
 pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
@@ -51,7 +76,9 @@ fn not_implemented(command: &str, unit: &str) -> ControlResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use minit_core::ipc::{decode_response, encode_request};
+    use minit_core::ipc::{decode_response, encode_request, UnitState};
+    use minit_core::manager::ServiceManager;
+    use minit_core::unit::parse_unit_toml;
 
     #[test]
     fn status_request_returns_empty_status_until_manager_exists() {
@@ -104,6 +131,60 @@ mod tests {
             decoded,
             ControlResponse::Error {
                 message: "start is not implemented yet for sshd".to_string()
+            }
+        );
+    }
+
+    fn service_manager_with_sshd() -> ServiceManager {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "sshd.service"
+description = "OpenSSH daemon"
+
+[exec]
+start = ["/usr/bin/sshd", "-D"]
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(unit).unwrap();
+        services
+    }
+
+    #[test]
+    fn control_service_reports_registered_unit_status() {
+        let mut service = ControlService::new(service_manager_with_sshd());
+
+        let response = service.handle_request(ControlRequest::Status {
+            unit: Some("sshd.service".to_string()),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Status {
+                units: vec![minit_core::ipc::UnitStatus {
+                    unit: "sshd.service".to_string(),
+                    state: UnitState::Inactive,
+                    main_pid: None,
+                    description: Some("OpenSSH daemon".to_string()),
+                }]
+            }
+        );
+    }
+
+    #[test]
+    fn control_service_reports_unknown_unit_errors() {
+        let mut service = ControlService::new(ServiceManager::new());
+
+        let response = service.handle_request(ControlRequest::Status {
+            unit: Some("missing.service".to_string()),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Error {
+                message: "unit missing.service was not found".to_string()
             }
         );
     }
