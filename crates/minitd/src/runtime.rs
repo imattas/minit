@@ -9,6 +9,10 @@ pub trait ProcessSpawner {
     fn spawn(&mut self, plan: &StartPlan) -> Result<u32, SpawnError>;
 }
 
+pub trait ProcessSignaler {
+    fn terminate(&mut self, pid: u32) -> Result<(), SignalError>;
+}
+
 #[derive(Default)]
 pub struct NoopReaper;
 
@@ -23,6 +27,13 @@ impl Reaper for NoopReaper {
 pub struct SpawnError(pub String);
 
 #[derive(Debug, Error, PartialEq, Eq)]
+#[error("failed to signal process {pid}: {message}")]
+pub struct SignalError {
+    pub pid: u32,
+    pub message: String,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum RuntimeError {
     #[error("service manager error: {0}")]
     Manager(#[from] ServiceManagerError),
@@ -30,6 +41,8 @@ pub enum RuntimeError {
     Cgroup(#[from] CgroupError),
     #[error("spawn error: {0}")]
     Spawn(#[from] SpawnError),
+    #[error("signal error: {0}")]
+    Signal(#[from] SignalError),
     #[error("cgroup for {0} did not become empty after kill")]
     CgroupStillPopulated(String),
 }
@@ -111,8 +124,30 @@ pub fn stop_service<F>(
 where
     F: CgroupFs,
 {
-    cgroups.kill_unit(cgroup_fs, unit)?;
-    wait_until_cgroup_empty(cgroups, cgroup_fs, unit)?;
+    let mut signaler = SystemProcessSignaler;
+    stop_service_with_signaler(services, cgroups, cgroup_fs, &mut signaler, unit)
+}
+
+pub fn stop_service_with_signaler<F, S>(
+    services: &mut ServiceManager,
+    cgroups: &CgroupManager,
+    cgroup_fs: &mut F,
+    signaler: &mut S,
+    unit: &str,
+) -> Result<(), RuntimeError>
+where
+    F: CgroupFs,
+    S: ProcessSignaler,
+{
+    for pid in cgroups.unit_pids(cgroup_fs, unit)? {
+        signaler.terminate(pid)?;
+    }
+
+    if !wait_until_cgroup_empty_for(cgroups, cgroup_fs, unit, 20)? {
+        cgroups.kill_unit(cgroup_fs, unit)?;
+        wait_until_cgroup_empty(cgroups, cgroup_fs, unit)?;
+    }
+
     cgroups.remove_unit(cgroup_fs, unit)?;
     services.mark_inactive(unit)?;
     Ok(())
@@ -126,15 +161,30 @@ fn wait_until_cgroup_empty<F>(
 where
     F: CgroupFs,
 {
-    for attempt in 0..20 {
+    if wait_until_cgroup_empty_for(cgroups, cgroup_fs, unit, 20)? {
+        return Ok(());
+    }
+    Err(RuntimeError::CgroupStillPopulated(unit.to_string()))
+}
+
+fn wait_until_cgroup_empty_for<F>(
+    cgroups: &CgroupManager,
+    cgroup_fs: &mut F,
+    unit: &str,
+    attempts: usize,
+) -> Result<bool, RuntimeError>
+where
+    F: CgroupFs,
+{
+    for attempt in 0..attempts {
         if cgroups.unit_is_empty(cgroup_fs, unit)? {
-            return Ok(());
+            return Ok(true);
         }
-        if attempt < 19 {
+        if attempt + 1 < attempts {
             std::thread::sleep(Duration::from_millis(25));
         }
     }
-    Err(RuntimeError::CgroupStillPopulated(unit.to_string()))
+    Ok(false)
 }
 
 pub struct ServiceRuntime<F, P, R = NoopReaper> {
@@ -253,6 +303,30 @@ impl ProcessSpawner for CommandSpawner {
     }
 }
 
+pub struct SystemProcessSignaler;
+
+impl ProcessSignaler for SystemProcessSignaler {
+    fn terminate(&mut self, pid: u32) -> Result<(), SignalError> {
+        terminate_process(pid)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn terminate_process(pid: u32) -> Result<(), SignalError> {
+    use nix::sys::signal::{kill, Signal};
+    use nix::unistd::Pid;
+
+    kill(Pid::from_raw(pid as i32), Signal::SIGTERM).map_err(|err| SignalError {
+        pid,
+        message: err.to_string(),
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn terminate_process(_pid: u32) -> Result<(), SignalError> {
+    Ok(())
+}
+
 #[cfg(target_os = "linux")]
 fn configure_child_security(command: &mut std::process::Command, no_new_privileges: bool) {
     use std::os::unix::process::CommandExt;
@@ -328,6 +402,18 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeSignaler {
+        terminated: Vec<u32>,
+    }
+
+    impl ProcessSignaler for FakeSignaler {
+        fn terminate(&mut self, pid: u32) -> Result<(), SignalError> {
+            self.terminated.push(pid);
+            Ok(())
+        }
+    }
+
     fn manager_with_sshd() -> ServiceManager {
         let unit = parse_unit_toml(
             r#"
@@ -381,12 +467,16 @@ start = ["/usr/bin/sshd", "-D"]
     }
 
     #[test]
-    fn stop_service_kills_cgroup_and_marks_inactive() {
+    fn stop_service_terminates_cgroup_and_marks_inactive() {
         let mut services = manager_with_sshd();
         services.plan_start("sshd.service").unwrap();
         services.mark_active("sshd.service", 321).unwrap();
         let cgroups = CgroupManager::new("/sys/fs/cgroup/minit");
         let mut cgroup_fs = FakeCgroupFs::default();
+        cgroup_fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.procs"),
+            "321\n".to_string(),
+        );
         cgroup_fs.reads.insert(
             PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
             "populated 0\nfrozen 0\n".to_string(),
@@ -394,12 +484,9 @@ start = ["/usr/bin/sshd", "-D"]
 
         stop_service(&mut services, &cgroups, &mut cgroup_fs, "sshd.service").unwrap();
 
-        assert_eq!(
-            cgroup_fs
-                .writes
-                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")),
-            Some(&"1\n".to_string())
-        );
+        assert!(!cgroup_fs
+            .writes
+            .contains_key(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")));
         assert!(cgroup_fs
             .removed
             .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
@@ -409,12 +496,50 @@ start = ["/usr/bin/sshd", "-D"]
     }
 
     #[test]
+    fn stop_service_sends_sigterm_to_cgroup_members_before_kill() {
+        let mut services = manager_with_sshd();
+        services.plan_start("sshd.service").unwrap();
+        services.mark_active("sshd.service", 321).unwrap();
+        let cgroups = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut cgroup_fs = FakeCgroupFs::default();
+        cgroup_fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.procs"),
+            "321\n654\n".to_string(),
+        );
+        cgroup_fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
+            "populated 1\nfrozen 0\n".to_string(),
+        );
+        let mut signaler = FakeSignaler::default();
+
+        let _ = stop_service_with_signaler(
+            &mut services,
+            &cgroups,
+            &mut cgroup_fs,
+            &mut signaler,
+            "sshd.service",
+        );
+
+        assert_eq!(signaler.terminated, vec![321, 654]);
+        assert_eq!(
+            cgroup_fs
+                .writes
+                .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")),
+            Some(&"1\n".to_string())
+        );
+    }
+
+    #[test]
     fn stop_service_fails_if_cgroup_stays_populated() {
         let mut services = manager_with_sshd();
         services.plan_start("sshd.service").unwrap();
         services.mark_active("sshd.service", 321).unwrap();
         let cgroups = CgroupManager::new("/sys/fs/cgroup/minit");
         let mut cgroup_fs = FakeCgroupFs::default();
+        cgroup_fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.procs"),
+            "321\n".to_string(),
+        );
         cgroup_fs.reads.insert(
             PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.events"),
             "populated 1\nfrozen 0\n".to_string(),

@@ -66,6 +66,20 @@ impl CgroupManager {
         fs.write(&path, "1\n")
     }
 
+    pub fn unit_pids<F: CgroupFs>(&self, fs: &mut F, unit: &str) -> Result<Vec<u32>, CgroupError> {
+        let path = self.unit_path(unit)?.join("cgroup.procs");
+        let procs = fs.read_to_string(&path)?;
+        procs
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                line.trim().parse::<u32>().map_err(|_| {
+                    CgroupError::Fs(format!("invalid pid {:?} in {}", line, path.display()))
+                })
+            })
+            .collect()
+    }
+
     pub fn unit_is_empty<F: CgroupFs>(&self, fs: &mut F, unit: &str) -> Result<bool, CgroupError> {
         let path = self.unit_path(unit)?.join("cgroup.events");
         let events = fs.read_to_string(&path)?;
@@ -197,6 +211,20 @@ mod tests {
                 .get(Path::new("/sys/fs/cgroup/minit/sshd.service/cgroup.kill")),
             Some(&"1\n".to_string())
         );
+    }
+
+    #[test]
+    fn unit_pids_reads_cgroup_procs() {
+        let manager = CgroupManager::new("/sys/fs/cgroup/minit");
+        let mut fs = FakeCgroupFs::default();
+        fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/sshd.service/cgroup.procs"),
+            "123\n456\n\n".to_string(),
+        );
+
+        let pids = manager.unit_pids(&mut fs, "sshd.service").unwrap();
+
+        assert_eq!(pids, vec![123, 456]);
     }
 
     #[test]
