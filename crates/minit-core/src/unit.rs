@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -113,6 +114,56 @@ impl RestartSection {
             })
             .and_then(|count| count.parse::<u32>().ok())
     }
+
+    pub fn limit_window(&self) -> Option<Duration> {
+        self.limit
+            .as_deref()
+            .and_then(|limit| limit.split_once('/').map(|(_, window)| window))
+            .and_then(parse_duration)
+    }
+
+    pub fn backoff_delay(&self, attempt: u32) -> Duration {
+        let delay = match self.backoff.as_deref() {
+            Some("fixed") => Duration::from_secs(1),
+            Some("exponential") => {
+                let exponent = attempt.saturating_sub(1).min(31);
+                Duration::from_secs(1u64 << exponent)
+            }
+            _ => Duration::ZERO,
+        };
+        let max_delay = self
+            .max_delay
+            .as_deref()
+            .and_then(parse_duration)
+            .unwrap_or(Duration::from_secs(30));
+        delay.min(max_delay)
+    }
+}
+
+fn parse_duration(value: &str) -> Option<Duration> {
+    let value = value.trim();
+    if value == "min" {
+        return Some(Duration::from_secs(60));
+    }
+    if let Some(number) = value.strip_suffix("ms") {
+        return number.parse::<u64>().ok().map(Duration::from_millis);
+    }
+    if let Some(number) = value.strip_suffix("min") {
+        return number
+            .parse::<u64>()
+            .ok()
+            .map(|value| Duration::from_secs(value * 60));
+    }
+    if let Some(number) = value.strip_suffix('m') {
+        return number
+            .parse::<u64>()
+            .ok()
+            .map(|value| Duration::from_secs(value * 60));
+    }
+    if let Some(number) = value.strip_suffix('s') {
+        return number.parse::<u64>().ok().map(Duration::from_secs);
+    }
+    value.parse::<u64>().ok().map(Duration::from_secs)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

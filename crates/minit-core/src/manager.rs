@@ -1,6 +1,7 @@
 use crate::ipc::{UnitState, UnitStatus};
 use crate::unit::{RestartPolicy, UnitDefinition, UnitValidationError};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
+use std::time::{Duration, Instant};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +16,7 @@ pub struct StartPlan {
 pub struct RestartDecision {
     pub unit: String,
     pub restart: bool,
+    pub delay: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,11 +25,22 @@ pub struct ServiceRecord {
     pub state: UnitState,
     pub main_pid: Option<u32>,
     pub restart_attempts: u32,
+    restart_events: VecDeque<Duration>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ServiceManager {
     units: BTreeMap<String, ServiceRecord>,
+    clock_base: Instant,
+}
+
+impl Default for ServiceManager {
+    fn default() -> Self {
+        Self {
+            units: BTreeMap::new(),
+            clock_base: Instant::now(),
+        }
+    }
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -59,6 +72,7 @@ impl ServiceManager {
                 state: UnitState::Inactive,
                 main_pid: None,
                 restart_attempts: 0,
+                restart_events: VecDeque::new(),
             },
         );
         Ok(())
@@ -101,6 +115,7 @@ impl ServiceManager {
         record.main_pid = None;
         if reset_restart_attempts {
             record.restart_attempts = 0;
+            record.restart_events.clear();
         }
         Ok(StartPlan {
             unit: unit.to_string(),
@@ -122,6 +137,15 @@ impl ServiceManager {
         pid: u32,
         successful: bool,
     ) -> Result<Option<RestartDecision>, ServiceManagerError> {
+        self.record_exit_at(pid, successful, self.clock_base.elapsed())
+    }
+
+    pub fn record_exit_at(
+        &mut self,
+        pid: u32,
+        successful: bool,
+        now: Duration,
+    ) -> Result<Option<RestartDecision>, ServiceManagerError> {
         let Some((unit, record)) = self
             .units
             .iter_mut()
@@ -136,18 +160,37 @@ impl ServiceManager {
             RestartPolicy::Always => true,
             RestartPolicy::OnFailure => !successful,
         };
-        let under_limit = record
-            .definition
-            .restart
-            .limit_count()
-            .is_none_or(|limit| record.restart_attempts < limit);
+
+        if let Some(window) = record.definition.restart.limit_window() {
+            while record
+                .restart_events
+                .front()
+                .is_some_and(|attempt| now.saturating_sub(*attempt) >= window)
+            {
+                record.restart_events.pop_front();
+            }
+        }
+
+        let under_limit = record.definition.restart.limit_count().is_none_or(|limit| {
+            if record.definition.restart.limit_window().is_some() {
+                record.restart_events.len() < limit as usize
+            } else {
+                record.restart_attempts < limit
+            }
+        });
 
         if should_restart && under_limit {
             record.restart_attempts += 1;
+            record.restart_events.push_back(now);
+            let delay = record
+                .definition
+                .restart
+                .backoff_delay(record.restart_attempts);
             record.state = UnitState::Starting;
             Ok(Some(RestartDecision {
                 unit: unit.clone(),
                 restart: true,
+                delay,
             }))
         } else {
             record.state = match successful {
@@ -157,6 +200,7 @@ impl ServiceManager {
             Ok(Some(RestartDecision {
                 unit: unit.clone(),
                 restart: false,
+                delay: Duration::ZERO,
             }))
         }
     }
@@ -346,6 +390,7 @@ limit = "2/min"
             RestartDecision {
                 unit: "crashy".to_string(),
                 restart: true,
+                delay: Duration::ZERO,
             }
         );
         let statuses = manager.status(Some("crashy")).unwrap();
@@ -383,9 +428,138 @@ limit = "1/min"
             RestartDecision {
                 unit: "crashy".to_string(),
                 restart: false,
+                delay: Duration::ZERO,
             }
         );
         let statuses = manager.status(Some("crashy")).unwrap();
         assert_eq!(statuses[0].state, UnitState::Failed);
+    }
+
+    #[test]
+    fn record_exit_restart_limit_expires_after_window() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+limit = "1/min"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+        manager.plan_start("crashy").unwrap();
+        manager.mark_active("crashy", 42).unwrap();
+        assert!(
+            manager
+                .record_exit_at(42, false, std::time::Duration::from_secs(0))
+                .unwrap()
+                .unwrap()
+                .restart
+        );
+        manager.plan_restart("crashy").unwrap();
+        manager.mark_active("crashy", 43).unwrap();
+        assert!(
+            !manager
+                .record_exit_at(43, false, std::time::Duration::from_secs(30))
+                .unwrap()
+                .unwrap()
+                .restart
+        );
+
+        manager.plan_restart("crashy").unwrap();
+        manager.mark_active("crashy", 44).unwrap();
+        let decision = manager
+            .record_exit_at(44, false, std::time::Duration::from_secs(61))
+            .unwrap()
+            .unwrap();
+
+        assert!(decision.restart);
+    }
+
+    #[test]
+    fn restart_decision_includes_fixed_backoff_delay() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+limit = "3/min"
+backoff = "fixed"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+        manager.plan_start("crashy").unwrap();
+        manager.mark_active("crashy", 42).unwrap();
+
+        let decision = manager
+            .record_exit_at(42, false, std::time::Duration::from_secs(0))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(decision.delay, std::time::Duration::from_secs(1));
+    }
+
+    #[test]
+    fn restart_decision_caps_exponential_backoff_delay() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+limit = "5/min"
+backoff = "exponential"
+max_delay = "2s"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+        manager.plan_start("crashy").unwrap();
+        manager.mark_active("crashy", 42).unwrap();
+        assert_eq!(
+            manager
+                .record_exit_at(42, false, std::time::Duration::from_secs(0))
+                .unwrap()
+                .unwrap()
+                .delay,
+            std::time::Duration::from_secs(1)
+        );
+        manager.plan_restart("crashy").unwrap();
+        manager.mark_active("crashy", 43).unwrap();
+        assert_eq!(
+            manager
+                .record_exit_at(43, false, std::time::Duration::from_secs(1))
+                .unwrap()
+                .unwrap()
+                .delay,
+            std::time::Duration::from_secs(2)
+        );
+        manager.plan_restart("crashy").unwrap();
+        manager.mark_active("crashy", 44).unwrap();
+
+        let decision = manager
+            .record_exit_at(44, false, std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(decision.delay, std::time::Duration::from_secs(2));
     }
 }

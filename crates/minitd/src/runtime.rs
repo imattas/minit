@@ -13,6 +13,19 @@ pub trait ProcessSignaler {
     fn terminate(&mut self, pid: u32) -> Result<(), SignalError>;
 }
 
+pub trait RestartSleeper {
+    fn sleep(&mut self, delay: Duration);
+}
+
+#[derive(Default)]
+pub struct ThreadRestartSleeper;
+
+impl RestartSleeper for ThreadRestartSleeper {
+    fn sleep(&mut self, delay: Duration) {
+        std::thread::sleep(delay);
+    }
+}
+
 #[derive(Default)]
 pub struct NoopReaper;
 
@@ -187,40 +200,62 @@ where
     Ok(false)
 }
 
-pub struct ServiceRuntime<F, P, R = NoopReaper> {
+pub struct ServiceRuntime<F, P, R = NoopReaper, S = ThreadRestartSleeper> {
     cgroups: CgroupManager,
     cgroup_fs: F,
     spawner: P,
     reaper: R,
+    sleeper: S,
 }
 
-impl<F, P> ServiceRuntime<F, P, NoopReaper> {
+impl<F, P> ServiceRuntime<F, P, NoopReaper, ThreadRestartSleeper> {
     pub fn new(cgroups: CgroupManager, cgroup_fs: F, spawner: P) -> Self {
         Self {
             cgroups,
             cgroup_fs,
             spawner,
             reaper: NoopReaper,
+            sleeper: ThreadRestartSleeper,
         }
     }
 }
 
-impl<F, P, R> ServiceRuntime<F, P, R> {
+impl<F, P, R> ServiceRuntime<F, P, R, ThreadRestartSleeper> {
     pub fn with_reaper(cgroups: CgroupManager, cgroup_fs: F, spawner: P, reaper: R) -> Self {
         Self {
             cgroups,
             cgroup_fs,
             spawner,
             reaper,
+            sleeper: ThreadRestartSleeper,
         }
     }
 }
 
-impl<F, P, R> ControlRuntime for ServiceRuntime<F, P, R>
+impl<F, P, R, S> ServiceRuntime<F, P, R, S> {
+    pub fn with_reaper_and_sleeper(
+        cgroups: CgroupManager,
+        cgroup_fs: F,
+        spawner: P,
+        reaper: R,
+        sleeper: S,
+    ) -> Self {
+        Self {
+            cgroups,
+            cgroup_fs,
+            spawner,
+            reaper,
+            sleeper,
+        }
+    }
+}
+
+impl<F, P, R, S> ControlRuntime for ServiceRuntime<F, P, R, S>
 where
     F: CgroupFs,
     P: ProcessSpawner,
     R: Reaper,
+    S: RestartSleeper,
 {
     fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
         let pid = start_service(
@@ -257,6 +292,9 @@ where
                 .remove_unit(&mut self.cgroup_fs, &decision.unit);
 
             if decision.restart {
+                if !decision.delay.is_zero() {
+                    self.sleeper.sleep(decision.delay);
+                }
                 let new_pid = restart_service(
                     services,
                     &self.cgroups,
@@ -352,6 +390,7 @@ fn configure_child_security(_command: &mut std::process::Command, _no_new_privil
 mod tests {
     use super::*;
     use crate::cgroups::CgroupFs;
+    use crate::reaper::{ReapError, ReapEvent};
     use minit_core::ipc::UnitState;
     use minit_core::unit::parse_unit_toml;
     use std::collections::{BTreeMap, BTreeSet};
@@ -402,6 +441,16 @@ mod tests {
         }
     }
 
+    struct FakeReaper {
+        events: Vec<ReapEvent>,
+    }
+
+    impl Reaper for FakeReaper {
+        fn reap_once(&mut self) -> Result<Option<ReapEvent>, ReapError> {
+            Ok(self.events.pop())
+        }
+    }
+
     #[derive(Default)]
     struct FakeSignaler {
         terminated: Vec<u32>,
@@ -411,6 +460,17 @@ mod tests {
         fn terminate(&mut self, pid: u32) -> Result<(), SignalError> {
             self.terminated.push(pid);
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeSleeper {
+        sleeps: Vec<Duration>,
+    }
+
+    impl RestartSleeper for FakeSleeper {
+        fn sleep(&mut self, delay: Duration) {
+            self.sleeps.push(delay);
         }
     }
 
@@ -555,5 +615,54 @@ start = ["/usr/bin/sshd", "-D"]
         assert!(!cgroup_fs
             .removed
             .contains(Path::new("/sys/fs/cgroup/minit/sshd.service")));
+    }
+
+    #[test]
+    fn reap_waits_restart_backoff_before_restart() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "crashy.service"
+
+[exec]
+start = ["/bin/false"]
+
+[restart]
+policy = "on-failure"
+limit = "3/min"
+backoff = "fixed"
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(unit).unwrap();
+        services.plan_start("crashy.service").unwrap();
+        services.mark_active("crashy.service", 321).unwrap();
+        let mut cgroup_fs = FakeCgroupFs::default();
+        cgroup_fs.reads.insert(
+            PathBuf::from("/sys/fs/cgroup/minit/crashy.service/cgroup.events"),
+            "populated 0\nfrozen 0\n".to_string(),
+        );
+        let cgroups = CgroupManager::new("/sys/fs/cgroup/minit");
+        let spawner = FakeSpawner {
+            next_pid: 654,
+            ..FakeSpawner::default()
+        };
+        let reaper = FakeReaper {
+            events: vec![ReapEvent {
+                pid: 321,
+                status: ReapStatus::Exited(1),
+            }],
+        };
+        let sleeper = FakeSleeper::default();
+        let mut runtime =
+            ServiceRuntime::with_reaper_and_sleeper(cgroups, cgroup_fs, spawner, reaper, sleeper);
+
+        runtime.reap(&mut services).unwrap();
+
+        assert_eq!(runtime.sleeper.sleeps, vec![Duration::from_secs(1)]);
+        let status = services.status(Some("crashy.service")).unwrap();
+        assert_eq!(status[0].state, UnitState::Active);
+        assert_eq!(status[0].main_pid, Some(654));
     }
 }
