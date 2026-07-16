@@ -21,6 +21,7 @@ pub enum ControlError {
 pub struct ControlSocketConfig {
     pub socket_path: PathBuf,
     pub max_requests: Option<usize>,
+    pub startup_command: Option<Vec<String>>,
 }
 
 impl Default for ControlSocketConfig {
@@ -28,6 +29,7 @@ impl Default for ControlSocketConfig {
         Self {
             socket_path: PathBuf::from(DEFAULT_CONTROL_SOCKET),
             max_requests: None,
+            startup_command: None,
         }
     }
 }
@@ -183,6 +185,15 @@ pub fn run_control_socket(
         "minitd: normal mode ready; control socket {}",
         config.socket_path.display()
     );
+    let mut startup_child = match &config.startup_command {
+        Some(argv) if !argv.is_empty() => {
+            let child = std::process::Command::new(&argv[0])
+                .args(&argv[1..])
+                .spawn()?;
+            Some(child)
+        }
+        _ => None,
+    };
     for stream in listener
         .incoming()
         .take(config.max_requests.unwrap_or(usize::MAX))
@@ -191,6 +202,9 @@ pub fn run_control_socket(
         let mut reader = BufReader::new(stream.try_clone()?);
         let mut writer = stream;
         handle_control_io_with_service(service, &mut reader, &mut writer)?;
+    }
+    if let Some(child) = startup_child.as_mut() {
+        let _ = child.wait();
     }
     Ok(())
 }
@@ -397,5 +411,6 @@ start = ["/usr/bin/sshd", "-D"]
             std::path::PathBuf::from(minit_core::ipc::DEFAULT_CONTROL_SOCKET)
         );
         assert_eq!(config.max_requests, None);
+        assert_eq!(config.startup_command, None);
     }
 }

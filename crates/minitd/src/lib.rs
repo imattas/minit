@@ -15,6 +15,7 @@ pub const DEFAULT_UNIT_DIR: &str = "/etc/minit/services";
 pub struct NormalConfig {
     pub unit_dir: PathBuf,
     pub socket: control::ControlSocketConfig,
+    pub smoke_status_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -22,6 +23,7 @@ impl Default for NormalConfig {
         Self {
             unit_dir: PathBuf::from(DEFAULT_UNIT_DIR),
             socket: control::ControlSocketConfig::default(),
+            smoke_status_unit: None,
         }
     }
 }
@@ -178,6 +180,8 @@ pub fn normal_config_from_kernel_cmdline(
                     .parse()
                     .map_err(|_| ConfigError("minit.max_requests must be a number".to_string()))?,
             );
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_status=") {
+            config.smoke_status_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -197,6 +201,9 @@ where
     }
     if arg_config.socket.max_requests.is_some() {
         config.socket.max_requests = arg_config.socket.max_requests;
+    }
+    if arg_config.smoke_status_unit.is_some() {
+        config.smoke_status_unit = arg_config.smoke_status_unit;
     }
     Ok(config)
 }
@@ -253,6 +260,8 @@ fn run_rescue_entrypoint() -> i32 {
 pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
     #[cfg(target_os = "linux")]
     {
+        use crate::shutdown::ShutdownExecutor;
+
         let services = if config.unit_dir.exists() {
             match units::load_units_from_dir(&config.unit_dir) {
                 Ok(services) => services,
@@ -264,14 +273,32 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
         } else {
             minit_core::manager::ServiceManager::new()
         };
+        let mut socket = config.socket.clone();
+        if let Some(unit) = &config.smoke_status_unit {
+            socket.max_requests = Some(1);
+            socket.startup_command = Some(vec![
+                "/bin/minitctl".to_string(),
+                "--socket".to_string(),
+                socket.socket_path.display().to_string(),
+                "status".to_string(),
+                unit.clone(),
+            ]);
+        }
         let runtime = runtime::ServiceRuntime::new(
             cgroups::CgroupManager::new(cgroups::DEFAULT_CGROUP_ROOT),
             cgroups::LinuxCgroupFs,
             runtime::CommandSpawner,
         );
         let mut service = control::ControlService::with_runtime(services, runtime);
-        match control::run_control_socket(&config.socket, &mut service) {
-            Ok(()) => 0,
+        match control::run_control_socket(&socket, &mut service) {
+            Ok(()) => {
+                if config.smoke_status_unit.is_some() && std::process::id() == 1 {
+                    let mut shutdown = shutdown::LinuxShutdownExecutor;
+                    let _ = shutdown.sync_filesystems();
+                    let _ = shutdown.reboot(shutdown::ShutdownAction::Poweroff);
+                }
+                0
+            }
             Err(error) => {
                 eprintln!("minitd: control socket failed: {error}");
                 1
@@ -400,5 +427,16 @@ mod tests {
             std::path::PathBuf::from("/run/minit/minitd.sock")
         );
         assert_eq!(config.socket.max_requests, Some(1));
+        assert_eq!(config.smoke_status_unit.as_deref(), None);
+    }
+
+    #[test]
+    fn normal_config_parses_smoke_status_unit() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_status=sshd",
+        )
+        .unwrap();
+
+        assert_eq!(config.smoke_status_unit.as_deref(), Some("sshd"));
     }
 }
