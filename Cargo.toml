@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/minit-core",
   "crates/minitd",
+  "crates/minitctl",
   "crates/minit-testkit",
 ]
 
@@ -15,6 +16,7 @@ repository = "https://example.invalid/minit"
 [workspace.dependencies]
 minit-core = { path = "crates/minit-core" }
 minit-testkit = { path = "crates/minit-testkit" }
+clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 libc = "0.2"
