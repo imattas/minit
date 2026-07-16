@@ -1,6 +1,7 @@
 pub mod early_mounts;
 pub mod reaper;
 pub mod rescue;
+pub mod shutdown;
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")
