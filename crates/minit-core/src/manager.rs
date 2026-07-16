@@ -18,6 +18,24 @@ pub struct StartPlan {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountPlan {
+    pub unit: String,
+    pub what: String,
+    pub where_path: String,
+    pub fstype: String,
+    pub options: Vec<String>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwapPlan {
+    pub unit: String,
+    pub path: String,
+    pub priority: Option<i32>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestartDecision {
     pub unit: String,
     pub restart: bool,
@@ -110,6 +128,18 @@ impl ServiceManager {
             .collect()
     }
 
+    pub fn active_storage_unit_names(&self) -> Vec<String> {
+        self.units
+            .iter()
+            .filter(|(_, record)| {
+                record.state == UnitState::Active
+                    && (record.definition.is_mount() || record.definition.is_swap())
+            })
+            .map(|(name, _)| name.clone())
+            .rev()
+            .collect()
+    }
+
     pub fn plan_start_graph(&self, unit: &str) -> Result<Vec<String>, ServiceManagerError> {
         Ok(self
             .plan_start_batches(unit)?
@@ -134,6 +164,14 @@ impl ServiceManager {
 
     pub fn is_target(&self, unit: &str) -> Result<bool, ServiceManagerError> {
         Ok(self.record(unit)?.definition.is_target())
+    }
+
+    pub fn is_mount(&self, unit: &str) -> Result<bool, ServiceManagerError> {
+        Ok(self.record(unit)?.definition.is_mount())
+    }
+
+    pub fn is_swap(&self, unit: &str) -> Result<bool, ServiceManagerError> {
+        Ok(self.record(unit)?.definition.is_swap())
     }
 
     pub fn explain(&self, unit: &str) -> Result<Vec<String>, ServiceManagerError> {
@@ -175,6 +213,35 @@ impl ServiceManager {
 
     pub fn plan_restart(&mut self, unit: &str) -> Result<StartPlan, ServiceManagerError> {
         self.plan_start_inner(unit, false)
+    }
+
+    pub fn plan_mount(&mut self, unit: &str) -> Result<MountPlan, ServiceManagerError> {
+        let record = self.record_mut(unit)?;
+        record.state = UnitState::Starting;
+        Ok(MountPlan {
+            unit: unit.to_string(),
+            what: record.definition.mount.what.clone().unwrap_or_default(),
+            where_path: record
+                .definition
+                .mount
+                .where_path
+                .clone()
+                .unwrap_or_default(),
+            fstype: record.definition.mount.fstype.clone().unwrap_or_default(),
+            options: record.definition.mount.options.clone(),
+            required: record.definition.mount.required,
+        })
+    }
+
+    pub fn plan_swap(&mut self, unit: &str) -> Result<SwapPlan, ServiceManagerError> {
+        let record = self.record_mut(unit)?;
+        record.state = UnitState::Starting;
+        Ok(SwapPlan {
+            unit: unit.to_string(),
+            path: record.definition.swap.path.clone().unwrap_or_default(),
+            priority: record.definition.swap.priority,
+            required: record.definition.swap.required,
+        })
     }
 
     fn plan_start_inner(
@@ -562,6 +629,102 @@ after = ["network.service"]
         assert_eq!(
             manager.plan_start("network.service").unwrap().argv,
             vec!["/bin/network"]
+        );
+    }
+
+    #[test]
+    fn plan_mount_start_returns_mount_details_and_marks_starting() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "var-log.mount"
+kind = "mount"
+
+[mount]
+what = "tmpfs"
+where = "/var/log"
+fstype = "tmpfs"
+options = ["nosuid", "nodev"]
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+
+        let plan = manager.plan_mount("var-log.mount").unwrap();
+        let status = manager.status(Some("var-log.mount")).unwrap();
+
+        assert_eq!(plan.unit, "var-log.mount");
+        assert_eq!(plan.what, "tmpfs");
+        assert_eq!(plan.where_path, "/var/log");
+        assert_eq!(plan.fstype, "tmpfs");
+        assert_eq!(plan.options, vec!["nosuid", "nodev"]);
+        assert!(plan.required);
+        assert_eq!(status[0].state, UnitState::Starting);
+    }
+
+    #[test]
+    fn plan_swap_start_returns_swap_details_and_marks_starting() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "scratch.swap"
+kind = "swap"
+
+[swap]
+path = "/swapfile"
+priority = 10
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(unit).unwrap();
+
+        let plan = manager.plan_swap("scratch.swap").unwrap();
+        let status = manager.status(Some("scratch.swap")).unwrap();
+
+        assert_eq!(plan.unit, "scratch.swap");
+        assert_eq!(plan.path, "/swapfile");
+        assert_eq!(plan.priority, Some(10));
+        assert!(plan.required);
+        assert_eq!(status[0].state, UnitState::Starting);
+    }
+
+    #[test]
+    fn active_storage_unit_names_returns_mounts_and_swaps_in_reverse_name_order() {
+        let mount = parse_unit_toml(
+            r#"
+[unit]
+name = "var-log.mount"
+kind = "mount"
+
+[mount]
+what = "tmpfs"
+where = "/var/log"
+fstype = "tmpfs"
+"#,
+        )
+        .unwrap();
+        let swap = parse_unit_toml(
+            r#"
+[unit]
+name = "scratch.swap"
+kind = "swap"
+
+[swap]
+path = "/swapfile"
+"#,
+        )
+        .unwrap();
+        let mut manager = ServiceManager::new();
+        manager.add_unit(mount).unwrap();
+        manager.add_unit(swap).unwrap();
+        manager.mark_active_without_pid("var-log.mount").unwrap();
+        manager.mark_active_without_pid("scratch.swap").unwrap();
+
+        assert_eq!(
+            manager.active_storage_unit_names(),
+            vec!["var-log.mount".to_string(), "scratch.swap".to_string()]
         );
     }
 

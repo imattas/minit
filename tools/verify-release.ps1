@@ -82,6 +82,30 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectBootTarget multi-user.target `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm mount smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectMountUnit var-log.mount `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
+    Invoke-Step "vm optional mount failure smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectMountFailureUnit optional-broken.mount `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
+    Invoke-Step "vm shutdown mount smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectShutdownMountUnit var-log.mount `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm stuck stop escalation smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
             -Kernel $Kernel `

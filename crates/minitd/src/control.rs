@@ -136,14 +136,14 @@ impl<R: ControlRuntime> ControlService<R> {
                 for graph_unit in batch {
                     if self
                         .services
-                        .is_service(&graph_unit)
+                        .is_target(&graph_unit)
                         .map_err(|err| err.to_string())?
                     {
-                        self.runtime.start(&mut self.services, &graph_unit)?;
-                    } else {
                         self.services
                             .mark_active_without_pid(&graph_unit)
                             .map_err(|err| err.to_string())?;
+                    } else {
+                        self.runtime.start(&mut self.services, &graph_unit)?;
                     }
                 }
             }

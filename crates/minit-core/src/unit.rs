@@ -15,6 +15,10 @@ pub struct UnitDefinition {
     #[serde(default)]
     pub resources: ResourceSection,
     #[serde(default)]
+    pub mount: MountSection,
+    #[serde(default)]
+    pub swap: SwapSection,
+    #[serde(default)]
     pub security: SecuritySection,
 }
 
@@ -29,7 +33,7 @@ impl UnitDefinition {
             });
         }
 
-        if !self.is_service() && !self.is_target() {
+        if !self.is_service() && !self.is_target() && !self.is_mount() && !self.is_swap() {
             return Err(UnitValidationError::UnsupportedUnitKind {
                 value: self.unit.kind.clone(),
             });
@@ -46,6 +50,34 @@ impl UnitDefinition {
                 return Err(UnitValidationError::NonAbsolutePath {
                     field: "exec.start[0]",
                     value: program.clone(),
+                });
+            }
+        }
+
+        if self.is_mount() {
+            validate_required("mount.what", self.mount.what.as_deref())?;
+            let Some(where_path) = self.mount.where_path.as_deref() else {
+                return Err(UnitValidationError::EmptyField {
+                    field: "mount.where",
+                });
+            };
+            if !where_path.starts_with('/') {
+                return Err(UnitValidationError::NonAbsolutePath {
+                    field: "mount.where",
+                    value: where_path.to_string(),
+                });
+            }
+            validate_required("mount.fstype", self.mount.fstype.as_deref())?;
+        }
+
+        if self.is_swap() {
+            let Some(path) = self.swap.path.as_deref() else {
+                return Err(UnitValidationError::EmptyField { field: "swap.path" });
+            };
+            if !path.starts_with('/') {
+                return Err(UnitValidationError::NonAbsolutePath {
+                    field: "swap.path",
+                    value: path.to_string(),
                 });
             }
         }
@@ -84,6 +116,14 @@ impl UnitDefinition {
 
     pub fn is_target(&self) -> bool {
         self.unit.kind == "target"
+    }
+
+    pub fn is_mount(&self) -> bool {
+        self.unit.kind == "mount"
+    }
+
+    pub fn is_swap(&self) -> bool {
+        self.unit.kind == "swap"
     }
 }
 
@@ -154,6 +194,32 @@ pub struct ResourceSection {
     pub memory_max: Option<String>,
     pub cpu_max: Option<String>,
     pub pids_max: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MountSection {
+    pub what: Option<String>,
+    #[serde(rename = "where")]
+    pub where_path: Option<String>,
+    pub fstype: Option<String>,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default = "default_required")]
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SwapSection {
+    pub path: Option<String>,
+    pub priority: Option<i32>,
+    #[serde(default = "default_required")]
+    pub required: bool,
+}
+
+fn default_required() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -323,6 +389,13 @@ fn validate_environment_entry(entry: &str) -> Result<(), UnitValidationError> {
         });
     }
     Ok(())
+}
+
+fn validate_required(field: &'static str, value: Option<&str>) -> Result<(), UnitValidationError> {
+    match value {
+        Some(value) if !value.trim().is_empty() => Ok(()),
+        _ => Err(UnitValidationError::EmptyField { field }),
+    }
 }
 
 fn validate_principal(field: &'static str, value: &str) -> Result<(), UnitValidationError> {
@@ -540,6 +613,75 @@ pids_max = "32"
     }
 
     #[test]
+    fn parses_mount_unit() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "var-log.mount"
+kind = "mount"
+
+[mount]
+what = "tmpfs"
+where = "/var/log"
+fstype = "tmpfs"
+options = ["nosuid", "nodev"]
+"#,
+        )
+        .expect("mount unit should parse");
+
+        unit.validate().expect("mount unit should validate");
+        assert!(unit.is_mount());
+        assert_eq!(unit.mount.what.as_deref(), Some("tmpfs"));
+        assert_eq!(unit.mount.where_path.as_deref(), Some("/var/log"));
+        assert_eq!(unit.mount.fstype.as_deref(), Some("tmpfs"));
+        assert_eq!(unit.mount.options, vec!["nosuid", "nodev"]);
+    }
+
+    #[test]
+    fn parses_swap_unit() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "scratch.swap"
+kind = "swap"
+
+[swap]
+path = "/swapfile"
+priority = 5
+"#,
+        )
+        .expect("swap unit should parse");
+
+        unit.validate().expect("swap unit should validate");
+        assert!(unit.is_swap());
+        assert_eq!(unit.swap.path.as_deref(), Some("/swapfile"));
+        assert_eq!(unit.swap.priority, Some(5));
+    }
+
+    #[test]
+    fn validation_rejects_mount_without_absolute_target() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "bad.mount"
+kind = "mount"
+
+[mount]
+what = "tmpfs"
+where = "var/log"
+fstype = "tmpfs"
+"#,
+        )
+        .expect("mount unit should parse");
+
+        let error = unit
+            .validate()
+            .expect_err("relative mount target must fail");
+
+        assert_eq!(error.field(), "mount.where");
+    }
+
+    #[test]
     fn parses_all_example_service_files() {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
         let examples_dir = std::path::Path::new(manifest_dir).join("../../config/examples");
@@ -558,7 +700,7 @@ pids_max = "32"
             parsed += 1;
         }
 
-        assert_eq!(parsed, 8);
+        assert_eq!(parsed, 11);
     }
 
     #[test]

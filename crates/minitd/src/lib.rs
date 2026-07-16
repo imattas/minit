@@ -5,6 +5,7 @@ pub mod reaper;
 pub mod rescue;
 pub mod runtime;
 pub mod shutdown;
+pub mod storage;
 pub mod units;
 
 use std::path::PathBuf;
@@ -25,6 +26,9 @@ pub struct NormalConfig {
     pub smoke_stuck_stop_unit: Option<String>,
     pub smoke_shutdown_stuck_unit: Option<String>,
     pub smoke_boot_target: Option<String>,
+    pub smoke_mount_unit: Option<String>,
+    pub smoke_mount_failure_unit: Option<String>,
+    pub smoke_shutdown_mount_unit: Option<String>,
 }
 
 impl Default for NormalConfig {
@@ -42,6 +46,9 @@ impl Default for NormalConfig {
             smoke_stuck_stop_unit: None,
             smoke_shutdown_stuck_unit: None,
             smoke_boot_target: None,
+            smoke_mount_unit: None,
+            smoke_mount_failure_unit: None,
+            smoke_shutdown_mount_unit: None,
         }
     }
 }
@@ -218,6 +225,12 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_shutdown_stuck_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_boot_target=") {
             config.smoke_boot_target = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_mount=") {
+            config.smoke_mount_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_mount_failure=") {
+            config.smoke_mount_failure_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_shutdown_mount=") {
+            config.smoke_shutdown_mount_unit = Some(value.to_string());
         }
     }
     Ok(config)
@@ -267,6 +280,15 @@ where
     }
     if arg_config.smoke_boot_target.is_some() {
         config.smoke_boot_target = arg_config.smoke_boot_target;
+    }
+    if arg_config.smoke_mount_unit.is_some() {
+        config.smoke_mount_unit = arg_config.smoke_mount_unit;
+    }
+    if arg_config.smoke_mount_failure_unit.is_some() {
+        config.smoke_mount_failure_unit = arg_config.smoke_mount_failure_unit;
+    }
+    if arg_config.smoke_shutdown_mount_unit.is_some() {
+        config.smoke_shutdown_mount_unit = arg_config.smoke_shutdown_mount_unit;
     }
     Ok(config)
 }
@@ -432,6 +454,36 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {target}; /bin/minitctl --socket {socket_path} status {target}; /bin/minitctl --socket {socket_path} status network.service; /bin/minitctl --socket {socket_path} status demo-sleep"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_mount_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}; /bin/busybox mount | /bin/busybox grep ' on /var/log ' && echo mounted-path:/var/log"
+                ),
+            ]);
+        } else if let Some(unit) = &config.smoke_mount_failure_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
+        } else if let Some(unit) = &config.smoke_shutdown_mount_unit {
+            socket.max_requests = Some(2);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                format!(
+                    "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} status {unit}"
+                ),
+            ]);
         } else if let Some(unit) = &config.smoke_status_unit {
             socket.max_requests = Some(1);
             socket.startup_command = Some(vec![
@@ -460,7 +512,10 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_shutdown_stop_unit.is_some()
                     || config.smoke_stuck_stop_unit.is_some()
                     || config.smoke_shutdown_stuck_unit.is_some()
-                    || config.smoke_boot_target.is_some())
+                    || config.smoke_boot_target.is_some()
+                    || config.smoke_mount_unit.is_some()
+                    || config.smoke_mount_failure_unit.is_some()
+                    || config.smoke_shutdown_mount_unit.is_some())
                     && std::process::id() == 1
                 {
                     if let Err(error) = service.shutdown() {
@@ -636,6 +691,9 @@ mod tests {
         assert_eq!(config.smoke_stuck_stop_unit.as_deref(), None);
         assert_eq!(config.smoke_shutdown_stuck_unit.as_deref(), None);
         assert_eq!(config.smoke_boot_target.as_deref(), None);
+        assert_eq!(config.smoke_mount_unit.as_deref(), None);
+        assert_eq!(config.smoke_mount_failure_unit.as_deref(), None);
+        assert_eq!(config.smoke_shutdown_mount_unit.as_deref(), None);
     }
 
     #[test]
@@ -737,6 +795,32 @@ mod tests {
         assert_eq!(
             config.smoke_boot_target.as_deref(),
             Some("multi-user.target")
+        );
+    }
+
+    #[test]
+    fn normal_config_parses_mount_smokes() {
+        let mount = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_mount=var-log.mount",
+        )
+        .unwrap();
+        let failure = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_mount_failure=optional-broken.mount",
+        )
+        .unwrap();
+        let shutdown = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_shutdown_mount=var-log.mount",
+        )
+        .unwrap();
+
+        assert_eq!(mount.smoke_mount_unit.as_deref(), Some("var-log.mount"));
+        assert_eq!(
+            failure.smoke_mount_failure_unit.as_deref(),
+            Some("optional-broken.mount")
+        );
+        assert_eq!(
+            shutdown.smoke_shutdown_mount_unit.as_deref(),
+            Some("var-log.mount")
         );
     }
 }

@@ -1,0 +1,10 @@
+[unit]
+name = "optional-broken.mount"
+description = "Optional mount failure smoke"
+kind = "mount"
+
+[mount]
+what = "missing"
+where = "/mnt/optional-broken"
+fstype = "missingfs"
+required = false

@@ -14,6 +14,9 @@ param(
     [string]$ExpectStuckStopUnit,
     [string]$ExpectShutdownStuckUnit,
     [string]$ExpectBootTarget,
+    [string]$ExpectMountUnit,
+    [string]$ExpectMountFailureUnit,
+    [string]$ExpectShutdownMountUnit,
     [string]$AppendExtra,
     [switch]$Help
 )
@@ -55,12 +58,21 @@ if ($ExpectShutdownStuckUnit) {
 if ($ExpectBootTarget) {
     $append = "$append minit.smoke_boot_target=$ExpectBootTarget"
 }
+if ($ExpectMountUnit) {
+    $append = "$append minit.smoke_mount=$ExpectMountUnit"
+}
+if ($ExpectMountFailureUnit) {
+    $append = "$append minit.smoke_mount_failure=$ExpectMountFailureUnit"
+}
+if ($ExpectShutdownMountUnit) {
+    $append = "$append minit.smoke_shutdown_mount=$ExpectShutdownMountUnit"
+}
 if ($AppendExtra) {
     $append = "$append $AppendExtra"
 }
 
 if ($Help) {
-    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-AppendExtra <kernel-args>]"
+    Write-Output "Usage: run-minit-qemu.ps1 -Kernel <bzImage> -Initramfs <initramfs.cpio> [-NormalMode] [-AutoShutdownSmoke] [-ExpectStatusUnit <unit>] [-ExpectStartUnit <unit>] [-ExpectStopUnit <unit>] [-ExpectRestartUnit <unit>] [-ExpectCgroupCleanupUnit <unit>] [-ExpectRestartPolicyUnit <unit>] [-ExpectShutdownStopUnit <unit>] [-ExpectStuckStopUnit <unit>] [-ExpectShutdownStuckUnit <unit>] [-ExpectBootTarget <target>] [-ExpectMountUnit <unit>] [-ExpectMountFailureUnit <unit>] [-ExpectShutdownMountUnit <unit>] [-AppendExtra <kernel-args>]"
     exit 0
 }
 
@@ -158,6 +170,24 @@ try {
                     exit 0
                 }
             }
+            if ($ExpectMountUnit) {
+                if ($output.Contains("accepted: mounted $ExpectMountUnit") -and $output.Contains("unit: $ExpectMountUnit") -and $output.Contains("state: active") -and $output.Contains("mounted-path:/var/log")) {
+                    Write-Output "Detected mount success for $ExpectMountUnit; VM mount smoke passed."
+                    exit 0
+                }
+            }
+            if ($ExpectMountFailureUnit) {
+                if ($output.Contains("accepted: skipped optional mount $ExpectMountFailureUnit") -and $output.Contains("unit: $ExpectMountFailureUnit") -and $output.Contains("state: inactive")) {
+                    Write-Output "Detected optional mount failure for $ExpectMountFailureUnit; VM mount-failure smoke passed."
+                    exit 0
+                }
+            }
+            if ($ExpectShutdownMountUnit) {
+                if ($output.Contains("accepted: mounted $ExpectShutdownMountUnit") -and $output.Contains("unit: $ExpectShutdownMountUnit") -and $output.Contains("state: active") -and $output.Contains("minitd: deactivated $ExpectShutdownMountUnit for shutdown")) {
+                    Write-Output "Detected clean mount shutdown for $ExpectShutdownMountUnit; VM shutdown-mount smoke passed."
+                    exit 0
+                }
+            }
             if ($ExpectStatusUnit) {
                 if ($output.Contains("unit: $ExpectStatusUnit")) {
                     Write-Output "Detected minitctl status for $ExpectStatusUnit; VM minitctl smoke passed."
@@ -248,6 +278,30 @@ try {
             exit 0
         }
         Write-Error "QEMU exited before expected boot target proof for $ExpectBootTarget was detected."
+        exit 5
+    }
+    if ($ExpectMountUnit) {
+        if ($output.Contains("accepted: mounted $ExpectMountUnit") -and $output.Contains("unit: $ExpectMountUnit") -and $output.Contains("state: active") -and $output.Contains("mounted-path:/var/log")) {
+            Write-Output "Detected mount success for $ExpectMountUnit; VM mount smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected mount proof for $ExpectMountUnit was detected."
+        exit 5
+    }
+    if ($ExpectMountFailureUnit) {
+        if ($output.Contains("accepted: skipped optional mount $ExpectMountFailureUnit") -and $output.Contains("unit: $ExpectMountFailureUnit") -and $output.Contains("state: inactive")) {
+            Write-Output "Detected optional mount failure for $ExpectMountFailureUnit; VM mount-failure smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected optional mount failure proof for $ExpectMountFailureUnit was detected."
+        exit 5
+    }
+    if ($ExpectShutdownMountUnit) {
+        if ($output.Contains("accepted: mounted $ExpectShutdownMountUnit") -and $output.Contains("unit: $ExpectShutdownMountUnit") -and $output.Contains("state: active") -and $output.Contains("minitd: deactivated $ExpectShutdownMountUnit for shutdown")) {
+            Write-Output "Detected clean mount shutdown for $ExpectShutdownMountUnit; VM shutdown-mount smoke passed."
+            exit 0
+        }
+        Write-Error "QEMU exited before expected shutdown mount proof for $ExpectShutdownMountUnit was detected."
         exit 5
     }
     if ($ExpectStatusUnit) {

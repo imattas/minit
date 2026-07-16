@@ -1,6 +1,7 @@
 use crate::cgroups::{CgroupError, CgroupFs, CgroupManager};
 use crate::control::ControlRuntime;
 use crate::reaper::{drain_reap_events, ReapStatus, Reaper};
+use crate::storage::{StorageError, StorageExecutor, SystemStorageExecutor};
 use minit_core::manager::{ServiceManager, ServiceManagerError, StartPlan};
 use std::time::Duration;
 use thiserror::Error;
@@ -58,6 +59,8 @@ pub enum RuntimeError {
     Spawn(#[from] SpawnError),
     #[error("signal error: {0}")]
     Signal(#[from] SignalError),
+    #[error("storage error: {0}")]
+    Storage(#[from] StorageError),
     #[error("cgroup for {0} did not become empty after kill")]
     CgroupStillPopulated(String),
 }
@@ -218,15 +221,17 @@ fn stop_poll_attempts(timeout: Duration) -> usize {
     timeout_ms.div_ceil(interval_ms).max(1) as usize
 }
 
-pub struct ServiceRuntime<F, P, R = NoopReaper, S = ThreadRestartSleeper> {
+pub struct ServiceRuntime<F, P, R = NoopReaper, S = ThreadRestartSleeper, T = SystemStorageExecutor>
+{
     cgroups: CgroupManager,
     cgroup_fs: F,
     spawner: P,
     reaper: R,
     sleeper: S,
+    storage: T,
 }
 
-impl<F, P> ServiceRuntime<F, P, NoopReaper, ThreadRestartSleeper> {
+impl<F, P> ServiceRuntime<F, P, NoopReaper, ThreadRestartSleeper, SystemStorageExecutor> {
     pub fn new(cgroups: CgroupManager, cgroup_fs: F, spawner: P) -> Self {
         Self {
             cgroups,
@@ -234,11 +239,25 @@ impl<F, P> ServiceRuntime<F, P, NoopReaper, ThreadRestartSleeper> {
             spawner,
             reaper: NoopReaper,
             sleeper: ThreadRestartSleeper,
+            storage: SystemStorageExecutor,
         }
     }
 }
 
-impl<F, P, R> ServiceRuntime<F, P, R, ThreadRestartSleeper> {
+impl<F, P, T> ServiceRuntime<F, P, NoopReaper, ThreadRestartSleeper, T> {
+    pub fn with_storage(cgroups: CgroupManager, cgroup_fs: F, spawner: P, storage: T) -> Self {
+        Self {
+            cgroups,
+            cgroup_fs,
+            spawner,
+            reaper: NoopReaper,
+            sleeper: ThreadRestartSleeper,
+            storage,
+        }
+    }
+}
+
+impl<F, P, R> ServiceRuntime<F, P, R, ThreadRestartSleeper, SystemStorageExecutor> {
     pub fn with_reaper(cgroups: CgroupManager, cgroup_fs: F, spawner: P, reaper: R) -> Self {
         Self {
             cgroups,
@@ -246,11 +265,12 @@ impl<F, P, R> ServiceRuntime<F, P, R, ThreadRestartSleeper> {
             spawner,
             reaper,
             sleeper: ThreadRestartSleeper,
+            storage: SystemStorageExecutor,
         }
     }
 }
 
-impl<F, P, R, S> ServiceRuntime<F, P, R, S> {
+impl<F, P, R, S> ServiceRuntime<F, P, R, S, SystemStorageExecutor> {
     pub fn with_reaper_and_sleeper(
         cgroups: CgroupManager,
         cgroup_fs: F,
@@ -264,18 +284,54 @@ impl<F, P, R, S> ServiceRuntime<F, P, R, S> {
             spawner,
             reaper,
             sleeper,
+            storage: SystemStorageExecutor,
         }
     }
 }
 
-impl<F, P, R, S> ControlRuntime for ServiceRuntime<F, P, R, S>
+impl<F, P, R, S, T> ControlRuntime for ServiceRuntime<F, P, R, S, T>
 where
     F: CgroupFs,
     P: ProcessSpawner,
     R: Reaper,
     S: RestartSleeper,
+    T: StorageExecutor,
 {
     fn start(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+        if services.is_mount(unit).map_err(|err| err.to_string())? {
+            let plan = services.plan_mount(unit).map_err(|err| err.to_string())?;
+            if let Err(error) = self.storage.mount(&plan) {
+                if plan.required {
+                    let _ = services.mark_failed(unit);
+                    return Err(error.to_string());
+                }
+                services
+                    .mark_inactive(unit)
+                    .map_err(|err| err.to_string())?;
+                return Ok(format!("skipped optional mount {unit}"));
+            }
+            services
+                .mark_active_without_pid(unit)
+                .map_err(|err| err.to_string())?;
+            return Ok(format!("mounted {unit}"));
+        }
+        if services.is_swap(unit).map_err(|err| err.to_string())? {
+            let plan = services.plan_swap(unit).map_err(|err| err.to_string())?;
+            if let Err(error) = self.storage.swap_on(&plan) {
+                if plan.required {
+                    let _ = services.mark_failed(unit);
+                    return Err(error.to_string());
+                }
+                services
+                    .mark_inactive(unit)
+                    .map_err(|err| err.to_string())?;
+                return Ok(format!("skipped optional swap {unit}"));
+            }
+            services
+                .mark_active_without_pid(unit)
+                .map_err(|err| err.to_string())?;
+            return Ok(format!("activated swap {unit}"));
+        }
         let pid = start_service(
             services,
             &self.cgroups,
@@ -288,6 +344,24 @@ where
     }
 
     fn stop(&mut self, services: &mut ServiceManager, unit: &str) -> Result<String, String> {
+        if services.is_mount(unit).map_err(|err| err.to_string())? {
+            let plan = services.plan_mount(unit).map_err(|err| err.to_string())?;
+            self.storage.unmount(&plan).map_err(|err| err.to_string())?;
+            services
+                .mark_inactive(unit)
+                .map_err(|err| err.to_string())?;
+            return Ok(format!("unmounted {unit}"));
+        }
+        if services.is_swap(unit).map_err(|err| err.to_string())? {
+            let plan = services.plan_swap(unit).map_err(|err| err.to_string())?;
+            self.storage
+                .swap_off(&plan)
+                .map_err(|err| err.to_string())?;
+            services
+                .mark_inactive(unit)
+                .map_err(|err| err.to_string())?;
+            return Ok(format!("deactivated swap {unit}"));
+        }
         stop_service(services, &self.cgroups, &mut self.cgroup_fs, unit)
             .map_err(|err| err.to_string())?;
         Ok(format!("stopped {unit}"))
@@ -340,6 +414,11 @@ where
             stop_service(services, &self.cgroups, &mut self.cgroup_fs, &unit)
                 .map_err(|err| err.to_string())?;
             eprintln!("minitd: stopped {unit} for shutdown");
+        }
+        let storage_units = services.active_storage_unit_names();
+        for unit in storage_units {
+            self.stop(services, &unit)?;
+            eprintln!("minitd: deactivated {unit} for shutdown");
         }
         Ok(())
     }
@@ -465,7 +544,9 @@ mod tests {
     use super::*;
     use crate::cgroups::CgroupFs;
     use crate::reaper::{ReapError, ReapEvent};
+    use crate::storage::{StorageError, StorageExecutor};
     use minit_core::ipc::UnitState;
+    use minit_core::manager::{MountPlan, SwapPlan};
     use minit_core::unit::parse_unit_toml;
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::{Path, PathBuf};
@@ -545,6 +626,47 @@ mod tests {
     impl RestartSleeper for FakeSleeper {
         fn sleep(&mut self, delay: Duration) {
             self.sleeps.push(delay);
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeStorage {
+        calls: Vec<String>,
+        fail_mount: bool,
+    }
+
+    impl StorageExecutor for FakeStorage {
+        fn mount(&mut self, plan: &MountPlan) -> Result<(), StorageError> {
+            if self.fail_mount {
+                return Err(StorageError::Mount {
+                    target: plan.where_path.clone(),
+                    message: "fake mount failure".to_string(),
+                });
+            }
+            self.calls.push(format!(
+                "mount:{}:{}:{}:{}",
+                plan.what,
+                plan.where_path,
+                plan.fstype,
+                plan.options.join(",")
+            ));
+            Ok(())
+        }
+
+        fn unmount(&mut self, plan: &MountPlan) -> Result<(), StorageError> {
+            self.calls.push(format!("unmount:{}", plan.where_path));
+            Ok(())
+        }
+
+        fn swap_on(&mut self, plan: &SwapPlan) -> Result<(), StorageError> {
+            self.calls
+                .push(format!("swapon:{}:{:?}", plan.path, plan.priority));
+            Ok(())
+        }
+
+        fn swap_off(&mut self, plan: &SwapPlan) -> Result<(), StorageError> {
+            self.calls.push(format!("swapoff:{}", plan.path));
+            Ok(())
         }
     }
 
@@ -746,6 +868,204 @@ backoff = "fixed"
         assert_eq!(stop_poll_attempts(Duration::from_millis(25)), 1);
         assert_eq!(stop_poll_attempts(Duration::from_millis(26)), 2);
         assert_eq!(stop_poll_attempts(Duration::from_millis(500)), 20);
+    }
+
+    #[test]
+    fn start_mount_unit_uses_storage_executor_and_marks_active() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "var-log.mount"
+kind = "mount"
+
+[mount]
+what = "tmpfs"
+where = "/var/log"
+fstype = "tmpfs"
+options = ["nosuid", "nodev"]
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(unit).unwrap();
+        let mut runtime = ServiceRuntime::with_storage(
+            CgroupManager::new("/sys/fs/cgroup/minit"),
+            FakeCgroupFs::default(),
+            FakeSpawner::default(),
+            FakeStorage::default(),
+        );
+
+        let message = runtime.start(&mut services, "var-log.mount").unwrap();
+
+        assert_eq!(message, "mounted var-log.mount");
+        assert_eq!(
+            runtime.storage.calls,
+            vec!["mount:tmpfs:/var/log:tmpfs:nosuid,nodev"]
+        );
+        assert_eq!(
+            services.status(Some("var-log.mount")).unwrap()[0].state,
+            UnitState::Active
+        );
+    }
+
+    #[test]
+    fn start_swap_unit_uses_storage_executor_and_marks_active() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "scratch.swap"
+kind = "swap"
+
+[swap]
+path = "/swapfile"
+priority = 5
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(unit).unwrap();
+        let mut runtime = ServiceRuntime::with_storage(
+            CgroupManager::new("/sys/fs/cgroup/minit"),
+            FakeCgroupFs::default(),
+            FakeSpawner::default(),
+            FakeStorage::default(),
+        );
+
+        let message = runtime.start(&mut services, "scratch.swap").unwrap();
+
+        assert_eq!(message, "activated swap scratch.swap");
+        assert_eq!(runtime.storage.calls, vec!["swapon:/swapfile:Some(5)"]);
+        assert_eq!(
+            services.status(Some("scratch.swap")).unwrap()[0].state,
+            UnitState::Active
+        );
+    }
+
+    #[test]
+    fn shutdown_deactivates_active_storage_units() {
+        let mount = parse_unit_toml(
+            r#"
+[unit]
+name = "var-log.mount"
+kind = "mount"
+
+[mount]
+what = "tmpfs"
+where = "/var/log"
+fstype = "tmpfs"
+"#,
+        )
+        .unwrap();
+        let swap = parse_unit_toml(
+            r#"
+[unit]
+name = "scratch.swap"
+kind = "swap"
+
+[swap]
+path = "/swapfile"
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(mount).unwrap();
+        services.add_unit(swap).unwrap();
+        services.mark_active_without_pid("var-log.mount").unwrap();
+        services.mark_active_without_pid("scratch.swap").unwrap();
+        let mut runtime = ServiceRuntime::with_storage(
+            CgroupManager::new("/sys/fs/cgroup/minit"),
+            FakeCgroupFs::default(),
+            FakeSpawner::default(),
+            FakeStorage::default(),
+        );
+
+        runtime.shutdown(&mut services).unwrap();
+
+        assert_eq!(
+            runtime.storage.calls,
+            vec!["unmount:/var/log", "swapoff:/swapfile"]
+        );
+        assert_eq!(
+            services.status(Some("var-log.mount")).unwrap()[0].state,
+            UnitState::Inactive
+        );
+        assert_eq!(
+            services.status(Some("scratch.swap")).unwrap()[0].state,
+            UnitState::Inactive
+        );
+    }
+
+    #[test]
+    fn required_mount_failure_marks_unit_failed() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "broken.mount"
+kind = "mount"
+
+[mount]
+what = "missing"
+where = "/mnt/missing"
+fstype = "missingfs"
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(unit).unwrap();
+        let mut runtime = ServiceRuntime::with_storage(
+            CgroupManager::new("/sys/fs/cgroup/minit"),
+            FakeCgroupFs::default(),
+            FakeSpawner::default(),
+            FakeStorage {
+                fail_mount: true,
+                ..FakeStorage::default()
+            },
+        );
+
+        let error = runtime.start(&mut services, "broken.mount").unwrap_err();
+
+        assert!(error.contains("fake mount failure"));
+        assert_eq!(
+            services.status(Some("broken.mount")).unwrap()[0].state,
+            UnitState::Failed
+        );
+    }
+
+    #[test]
+    fn optional_mount_failure_marks_unit_inactive_and_does_not_error() {
+        let unit = parse_unit_toml(
+            r#"
+[unit]
+name = "optional.mount"
+kind = "mount"
+
+[mount]
+what = "missing"
+where = "/mnt/optional"
+fstype = "missingfs"
+required = false
+"#,
+        )
+        .unwrap();
+        let mut services = ServiceManager::new();
+        services.add_unit(unit).unwrap();
+        let mut runtime = ServiceRuntime::with_storage(
+            CgroupManager::new("/sys/fs/cgroup/minit"),
+            FakeCgroupFs::default(),
+            FakeSpawner::default(),
+            FakeStorage {
+                fail_mount: true,
+                ..FakeStorage::default()
+            },
+        );
+
+        let message = runtime.start(&mut services, "optional.mount").unwrap();
+
+        assert_eq!(message, "skipped optional mount optional.mount");
+        assert_eq!(
+            services.status(Some("optional.mount")).unwrap()[0].state,
+            UnitState::Inactive
+        );
     }
 
     #[test]

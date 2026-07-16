@@ -1,0 +1,10 @@
+[unit]
+name = "var-log.mount"
+description = "VM smoke tmpfs mount for /var/log"
+kind = "mount"
+
+[mount]
+what = "tmpfs"
+where = "/var/log"
+fstype = "tmpfs"
+options = ["nosuid", "nodev"]

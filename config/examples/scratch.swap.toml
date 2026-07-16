@@ -1,0 +1,8 @@
+[unit]
+name = "scratch.swap"
+description = "Example swap unit"
+kind = "swap"
+
+[swap]
+path = "/swapfile"
+priority = 5
