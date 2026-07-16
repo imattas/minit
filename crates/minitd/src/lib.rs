@@ -20,11 +20,16 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    let args: Vec<String> = _args.into_iter().map(Into::into).collect();
     let is_pid_one = current_process_is_pid_one();
     let kernel_cmdline = read_kernel_cmdline();
 
-    if should_enter_rescue(_args, is_pid_one, &kernel_cmdline) {
+    if should_enter_rescue(args.clone(), is_pid_one, &kernel_cmdline) {
         return run_rescue_entrypoint();
+    }
+
+    if should_enter_normal(args, is_pid_one, &kernel_cmdline) {
+        return run_normal_entrypoint();
     }
 
     0
@@ -45,11 +50,36 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    is_rescue_requested(args)
+    let args: Vec<String> = args.into_iter().map(Into::into).collect();
+    let explicit_rescue = is_rescue_requested(args.clone())
         || kernel_cmdline
             .split_whitespace()
+            .any(|arg| arg == "minit.rescue=1");
+
+    explicit_rescue || (is_pid_one && !is_normal_requested(args))
+}
+
+pub fn should_enter_normal<I, S>(args: I, is_pid_one: bool, kernel_cmdline: &str) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let args: Vec<String> = args.into_iter().map(Into::into).collect();
+    !is_rescue_requested(args.clone())
+        && !kernel_cmdline
+            .split_whitespace()
             .any(|arg| arg == "minit.rescue=1")
-        || is_pid_one
+        && (is_pid_one || is_normal_requested(args))
+}
+
+fn is_normal_requested<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    args.into_iter()
+        .map(Into::into)
+        .any(|arg| arg == "--normal")
 }
 
 fn current_process_is_pid_one() -> bool {
@@ -72,6 +102,28 @@ fn run_rescue_entrypoint() -> i32 {
     #[cfg(target_os = "linux")]
     {
         rescue::run_linux_rescue()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        0
+    }
+}
+
+pub fn run_normal_entrypoint() -> i32 {
+    #[cfg(target_os = "linux")]
+    {
+        use minit_core::manager::ServiceManager;
+
+        let mut service = control::ControlService::new(ServiceManager::new());
+        let config = control::ControlSocketConfig::default();
+        match control::run_control_socket_once(&config, &mut service) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("minitd: control socket failed: {error}");
+                1
+            }
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -118,5 +170,24 @@ mod tests {
         ));
         assert!(crate::should_enter_rescue(["/init"], true, "console=ttyS0"));
         assert!(!crate::should_enter_rescue(["minitd"], false, ""));
+    }
+
+    #[test]
+    fn normal_flag_selects_normal_mode_unless_rescue_is_explicit() {
+        assert!(crate::should_enter_normal(
+            ["/init", "--normal"],
+            true,
+            "console=ttyS0"
+        ));
+        assert!(!crate::should_enter_rescue(
+            ["/init", "--normal"],
+            true,
+            "console=ttyS0"
+        ));
+        assert!(!crate::should_enter_normal(
+            ["/init", "--normal", "--rescue"],
+            true,
+            "console=ttyS0"
+        ));
     }
 }
