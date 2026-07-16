@@ -129,9 +129,9 @@
 **Interfaces:**
 - Produces VM smokes for control socket permissions, `no_new_privileges`, and UID/GID where feasible.
 
-- [ ] Add failing config parsing tests.
-- [ ] Add controlled VM checks that emit clear proof strings.
-- [ ] Add release gate steps only for stable checks.
+- [x] Add failing config parsing tests.
+- [x] Add controlled VM checks that emit clear proof strings.
+- [x] Add release gate steps only for stable checks.
 
 ### Task 8: Bounded Parallel Batch Start
 

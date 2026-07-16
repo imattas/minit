@@ -1,0 +1,14 @@
+[unit]
+name = "hardening-check.service"
+description = "Service that prints runtime hardening state for VM proof"
+
+[exec]
+start = ["/bin/sh", "-c", "echo hardening-nnp:$(/bin/busybox awk '/NoNewPrivs/ {print $2}' /proc/self/status); echo hardening-uid:$(/bin/busybox id -u); echo hardening-gid:$(/bin/busybox id -g); /bin/sleep 600"]
+
+[restart]
+policy = "never"
+
+[security]
+no_new_privileges = true
+user = "1000"
+group = "1000"

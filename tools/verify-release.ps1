@@ -178,6 +178,14 @@ if ($Kernel -and $BusyBoxPath) {
             -ExpectLongRunningUnit long-running.service `
             -TimeoutSeconds $VmTimeoutSeconds
     }
+    Invoke-Step "vm hardening smoke" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-minit-qemu.ps1 `
+            -Kernel $Kernel `
+            -Initramfs $initramfs `
+            -NormalMode `
+            -ExpectHardeningUnit hardening-check.service `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
     Invoke-Step "vm boot loop smoke" {
         powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\run-boot-loop.ps1 `
             -Kernel $Kernel `
