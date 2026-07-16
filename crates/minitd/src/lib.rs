@@ -31,6 +31,7 @@ pub struct NormalConfig {
     pub smoke_mount_failure_unit: Option<String>,
     pub smoke_shutdown_mount_unit: Option<String>,
     pub smoke_events_unit: Option<String>,
+    pub smoke_graph_unit: Option<String>,
     pub smoke_long_running_unit: Option<String>,
 }
 
@@ -54,6 +55,7 @@ impl Default for NormalConfig {
             smoke_mount_failure_unit: None,
             smoke_shutdown_mount_unit: None,
             smoke_events_unit: None,
+            smoke_graph_unit: None,
             smoke_long_running_unit: None,
         }
     }
@@ -241,6 +243,8 @@ pub fn normal_config_from_kernel_cmdline(
             config.smoke_shutdown_mount_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_events=") {
             config.smoke_events_unit = Some(value.to_string());
+        } else if let Some(value) = arg.strip_prefix("minit.smoke_graph=") {
+            config.smoke_graph_unit = Some(value.to_string());
         } else if let Some(value) = arg.strip_prefix("minit.smoke_long_running=") {
             config.smoke_long_running_unit = Some(value.to_string());
         }
@@ -307,6 +311,9 @@ where
     }
     if arg_config.smoke_events_unit.is_some() {
         config.smoke_events_unit = arg_config.smoke_events_unit;
+    }
+    if arg_config.smoke_graph_unit.is_some() {
+        config.smoke_graph_unit = arg_config.smoke_graph_unit;
     }
     if arg_config.smoke_long_running_unit.is_some() {
         config.smoke_long_running_unit = arg_config.smoke_long_running_unit;
@@ -517,6 +524,16 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     "/bin/minitctl --socket {socket_path} start {unit}; /bin/minitctl --socket {socket_path} events"
                 ),
             ]);
+        } else if let Some(unit) = &config.smoke_graph_unit {
+            socket.max_requests = Some(1);
+            let socket_path = socket.socket_path.display();
+            socket.startup_command = Some(vec![
+                "/bin/minitctl".to_string(),
+                "--socket".to_string(),
+                socket_path.to_string(),
+                "graph".to_string(),
+                unit.clone(),
+            ]);
         } else if let Some(unit) = &config.smoke_long_running_unit {
             socket.max_requests = Some(2);
             let socket_path = socket.socket_path.display();
@@ -569,6 +586,7 @@ pub fn run_normal_entrypoint(config: NormalConfig) -> i32 {
                     || config.smoke_mount_failure_unit.is_some()
                     || config.smoke_shutdown_mount_unit.is_some()
                     || config.smoke_events_unit.is_some()
+                    || config.smoke_graph_unit.is_some()
                     || config.smoke_long_running_unit.is_some())
                     && std::process::id() == 1
                 {
@@ -754,6 +772,7 @@ mod tests {
         assert_eq!(config.smoke_mount_failure_unit.as_deref(), None);
         assert_eq!(config.smoke_shutdown_mount_unit.as_deref(), None);
         assert_eq!(config.smoke_events_unit.as_deref(), None);
+        assert_eq!(config.smoke_graph_unit.as_deref(), None);
         assert_eq!(config.smoke_long_running_unit.as_deref(), None);
     }
 
@@ -903,6 +922,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.smoke_events_unit.as_deref(), Some("demo-sleep"));
+    }
+
+    #[test]
+    fn normal_config_parses_graph_smoke() {
+        let config = crate::normal_config_from_kernel_cmdline(
+            "console=ttyS0 minit.normal=1 minit.smoke_graph=multi-user.target",
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.smoke_graph_unit.as_deref(),
+            Some("multi-user.target")
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub enum ControlRequest {
     Status { unit: Option<String> },
     List,
     Explain { unit: String },
+    Graph { unit: String },
     Events,
     Start { unit: String },
     Stop { unit: String },
@@ -46,6 +47,10 @@ pub enum ControlResponse {
     Explanation {
         unit: String,
         lines: Vec<String>,
+    },
+    Graph {
+        unit: String,
+        batches: Vec<Vec<String>>,
     },
     Events {
         events: Vec<crate::diagnostics::DiagnosticEvent>,
@@ -166,6 +171,29 @@ mod tests {
         assert_eq!(
             decode_request(&encode_request(&request).unwrap()).unwrap(),
             request
+        );
+    }
+
+    #[test]
+    fn graph_request_and_response_round_trip() {
+        let request = ControlRequest::Graph {
+            unit: "multi-user.target".to_string(),
+        };
+        let response = ControlResponse::Graph {
+            unit: "multi-user.target".to_string(),
+            batches: vec![
+                vec!["network.service".to_string(), "demo-sleep".to_string()],
+                vec!["multi-user.target".to_string()],
+            ],
+        };
+
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+        assert_eq!(
+            decode_response(&encode_response(&response).unwrap()).unwrap(),
+            response
         );
     }
 

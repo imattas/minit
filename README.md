@@ -2,7 +2,7 @@
 
 `minit` is a Rust Linux init and service manager experiment targeting modern normal Linux distributions.
 
-Current milestone: VM-proven experimental release candidate with `minitd` as PID 1, cgroups v2 supervision, `minitctl` status/list/start/stop/restart/explain/events, target boot, mount/swap units, diagnostic events, release packaging, and QEMU smoke coverage.
+Current milestone: VM-proven experimental release candidate with `minitd` as PID 1, cgroups v2 supervision, `minitctl` status/list/start/stop/restart/explain/graph/events, target boot, mount/swap units, diagnostic events, release packaging, and QEMU smoke coverage.
 
 Normal mode will require Linux with cgroups v2. Rescue/initramfs mode is degraded and only intended to mount basic filesystems, start a shell or getty, reap children, and shut down cleanly.
 
@@ -30,4 +30,4 @@ Run the extended VM stress loop for release-candidate validation:
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-release.ps1 -Kernel C:\minit-vm\bzImage -BusyBoxPath C:\minit-vm\busybox -ExtendedVmStress -StressBootCount 25
 ```
 
-The full gate checks formatting, tests, Linux `musl` builds, release packaging/checksums, normal-mode VM status, service lifecycle, cgroup cleanup, restart policy, target boot, mount handling, diagnostic events, long-running supervision, repeated boot/shutdown, stuck stop escalation, and managed shutdown behavior.
+The full gate checks formatting, tests, Linux `musl` builds, release packaging/checksums, normal-mode VM status, service lifecycle, cgroup cleanup, restart policy, target boot, dependency graph reporting, mount handling, diagnostic events, long-running supervision, repeated boot/shutdown, stuck stop escalation, and managed shutdown behavior.

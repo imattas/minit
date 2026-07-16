@@ -114,6 +114,12 @@ impl<R: ControlRuntime> ControlService<R> {
                     message: error.to_string(),
                 },
             },
+            ControlRequest::Graph { unit } => match self.services.plan_start_batches(&unit) {
+                Ok(batches) => ControlResponse::Graph { unit, batches },
+                Err(error) => ControlResponse::Error {
+                    message: error.to_string(),
+                },
+            },
             ControlRequest::Events => ControlResponse::Events {
                 events: self.events.recent(),
             },
@@ -198,6 +204,10 @@ pub fn handle_control_request(request: ControlRequest) -> ControlResponse {
         ControlRequest::Explain { unit } => ControlResponse::Explanation {
             unit,
             lines: Vec::new(),
+        },
+        ControlRequest::Graph { unit } => ControlResponse::Graph {
+            unit,
+            batches: Vec::new(),
         },
         ControlRequest::Events => ControlResponse::Events { events: Vec::new() },
         ControlRequest::Start { unit } => not_implemented("start", &unit),
@@ -647,6 +657,39 @@ wants = ["sshd.service"]
                     "kind: target".to_string(),
                     "state: inactive".to_string(),
                     "wants: sshd.service".to_string(),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn control_service_reports_target_start_graph_batches() {
+        let target = parse_unit_toml(
+            r#"
+[unit]
+name = "multi-user.target"
+kind = "target"
+
+[dependencies]
+wants = ["sshd.service"]
+"#,
+        )
+        .unwrap();
+        let mut services = service_manager_with_sshd();
+        services.add_unit(target).unwrap();
+        let mut service = ControlService::new(services);
+
+        let response = service.handle_request(ControlRequest::Graph {
+            unit: "multi-user.target".to_string(),
+        });
+
+        assert_eq!(
+            response,
+            ControlResponse::Graph {
+                unit: "multi-user.target".to_string(),
+                batches: vec![
+                    vec!["sshd.service".to_string()],
+                    vec!["multi-user.target".to_string()],
                 ],
             }
         );

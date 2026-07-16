@@ -4,7 +4,7 @@
 
 This roadmap is intentionally strict. A phase is not complete until the code, tests, Linux builds, and VM evidence are in place.
 
-Status: the v0.1 through v1.0 candidate roadmap has been implemented and pushed. The current full release gate verifies formatting, unit tests, Linux `musl` builds, release packaging/checksums, initramfs generation, service lifecycle, restart policy, target boot, hardening, mount handling, events, long-running supervision, boot-loop behavior, stuck-process handling, and shutdown escalation.
+Status: the v0.1 through v1.0 candidate roadmap has been implemented and pushed. The current full release gate verifies formatting, unit tests, Linux `musl` builds, release packaging/checksums, initramfs generation, service lifecycle, restart policy, target boot, dependency graph reporting, hardening, mount handling, events, long-running supervision, boot-loop behavior, stuck-process handling, and shutdown escalation.
 
 ## Current Baseline
 
@@ -22,6 +22,7 @@ Completed:
 - Strict unit parsing, fail-closed unsupported security handling, UID/GID switching, clean environment handling, cgroup v2 resources, fuzz harnesses, and security review notes.
 - Mount and swap units with shutdown deactivation, optional mount failure behavior, and VM mount smokes.
 - Diagnostic event buffer, `minitctl events`, boot and shutdown timeline markers.
+- `minitctl graph <unit>` reports deterministic target start batches and is covered by a VM smoke.
 - Release packaging script, checksums, install/rollback notes, and release template.
 - Long-running service smoke, repeated boot/shutdown loop verification, and daily-driver candidate notes.
 
@@ -69,6 +70,7 @@ Must have:
 - Parallel start where dependency ordering allows it.
 - Deterministic failure propagation for `requires`, `wants`, `before`, and `after`.
 - `minitctl explain <unit>` showing dependency blockers and reason chain.
+- `minitctl graph <unit>` showing deterministic start batches.
 - VM boot profile that starts a small multi-unit target.
 
 ### v0.4 Distro Profile Release

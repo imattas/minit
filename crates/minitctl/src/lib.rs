@@ -19,6 +19,7 @@ pub enum Command {
     Status { unit: Option<String> },
     List,
     Explain { unit: String },
+    Graph { unit: String },
     Events,
     Start { unit: String },
     Stop { unit: String },
@@ -174,6 +175,7 @@ pub fn command_to_request(command: Command) -> ControlRequest {
         Command::Status { unit } => ControlRequest::Status { unit },
         Command::List => ControlRequest::List,
         Command::Explain { unit } => ControlRequest::Explain { unit },
+        Command::Graph { unit } => ControlRequest::Graph { unit },
         Command::Events => ControlRequest::Events,
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
@@ -243,6 +245,13 @@ pub fn render_response(response: &ControlResponse) -> String {
             let mut output = format!("unit: {unit}\n");
             for line in lines {
                 output.push_str(&format!("explain: {line}\n"));
+            }
+            output
+        }
+        ControlResponse::Graph { unit, batches } => {
+            let mut output = format!("unit: {unit}\n");
+            for (index, batch) in batches.iter().enumerate() {
+                output.push_str(&format!("batch {}: {}\n", index + 1, batch.join(", ")));
             }
             output
         }
@@ -352,6 +361,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_graph_command() {
+        let cli = Cli::parse_from(["minitctl", "graph", "multi-user.target"]);
+
+        assert_eq!(
+            cli.command,
+            Command::Graph {
+                unit: "multi-user.target".to_string()
+            }
+        );
+    }
+
+    #[test]
     fn parses_events_command() {
         let cli = Cli::parse_from(["minitctl", "events"]);
 
@@ -421,6 +442,14 @@ mod tests {
             }),
             ControlRequest::Explain {
                 unit: "sshd".to_string()
+            }
+        );
+        assert_eq!(
+            command_to_request(Command::Graph {
+                unit: "multi-user.target".to_string()
+            }),
+            ControlRequest::Graph {
+                unit: "multi-user.target".to_string()
             }
         );
         assert_eq!(command_to_request(Command::Events), ControlRequest::Events);
@@ -511,6 +540,22 @@ mod tests {
         assert!(output.contains("unit: multi-user.target"));
         assert!(output.contains("explain: kind: target"));
         assert!(output.contains("explain: wants: getty.service"));
+    }
+
+    #[test]
+    fn renders_graph_response_by_start_batch() {
+        let response = ControlResponse::Graph {
+            unit: "multi-user.target".to_string(),
+            batches: vec![
+                vec!["network.service".to_string(), "demo-sleep".to_string()],
+                vec!["multi-user.target".to_string()],
+            ],
+        };
+
+        assert_eq!(
+            render_response(&response),
+            "unit: multi-user.target\nbatch 1: network.service, demo-sleep\nbatch 2: multi-user.target\n"
+        );
     }
 
     #[test]
