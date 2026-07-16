@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/minit-core",
+  "crates/minitd",
+  "crates/minit-testkit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://example.invalid/minit"
+
+[workspace.dependencies]
+minit-core = { path = "crates/minit-core" }
+minit-testkit = { path = "crates/minit-testkit" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2.0"
+libc = "0.2"
+nix = { version = "0.30", features = ["fs", "mount", "process", "signal", "user"] }

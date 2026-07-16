@@ -1,0 +1,17 @@
+[package]
+name = "minitd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+minit-core.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+nix.workspace = true
+
+[dev-dependencies]
+minit-testkit.workspace = true

@@ -1,0 +1,9 @@
+/target/
+/.superpowers/
+/.worktrees/
+/tests/vm/artifacts/
+/tools/vm/artifacts/
+*.log
+*.img
+*.cpio
+*.cpio.gz
