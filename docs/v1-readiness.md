@@ -20,11 +20,14 @@ The full gate runs:
 - normal-mode VM verification with the extended boot-loop stress gate.
 - security verification through `tools\verify-security.ps1`.
 - Alpine minirootfs distro-rootfs boot validation unless `-SkipAlpine` is explicitly supplied.
+- full-disk VM validation with a generated ext4 root image, `minitd` as PID 1 after `switch_root`, `minitctl status`, `list`, `restart`, `events`, `logs`, boot-timeline output, clean shutdown, and preserved serial transcripts under `tools\vm\artifacts\full-disk-transcripts`.
 - optional Debian and Arch rootfs gates when `-RequireDebian` or `-RequireArch` is supplied.
 
 The script writes machine-readable evidence to `tools\release\v1-readiness-evidence.json`.
 
 VM smoke steps use bounded retries in `tools\verify-release.ps1` because QEMU launch/capture on developer hosts can fail before `minitd` starts. Source, build, package, and security steps do not retry. A VM step is still blocked if all retry attempts fail.
+
+The full-disk gate downloads and extracts the pinned Alpine `linux-virt` package so the disk boot uses a kernel and module tree that can discover and mount the generated ext4 disk. The `-Kernel` input is still required for the existing initramfs and distro-rootfs smokes.
 
 ## Source-Only Preflight
 

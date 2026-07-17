@@ -125,6 +125,17 @@ if ($SourceOnly) {
     }
 }
 
+if ($SourceOnly) {
+    Write-Host "Skipping full-disk VM gate in source-only mode."
+} else {
+    Invoke-Step "v1 full-disk VM gate" {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\vm\verify-full-disk.ps1 `
+            -Kernel $Kernel `
+            -BusyBoxPath $BusyBoxPath `
+            -TimeoutSeconds $VmTimeoutSeconds
+    }
+}
+
 if ($RequireDebian) {
     if ($DebianRootfsTar) {
         Assert-File "DebianRootfsTar" $DebianRootfsTar
@@ -181,6 +192,7 @@ $evidence = [pscustomobject]@{
     stressBootCount = if ($SourceOnly) { 0 } else { $StressBootCount }
     securityGate = -not $SkipSecurity
     alpineGate = (-not $SourceOnly) -and (-not $SkipAlpine)
+    fullDiskGate = -not $SourceOnly
     debianGate = [bool]$RequireDebian
     archGate = [bool]$RequireArch
     steps = $steps
