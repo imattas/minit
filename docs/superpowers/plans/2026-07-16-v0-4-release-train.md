@@ -167,8 +167,8 @@ Verification note: Alpine minirootfs gate was available and passed. Debian and A
 - Produces Git tag `v0.4.0-experimental`.
 - Produces GitHub pre-release with checked-in notes.
 
-- [ ] Update version and release notes.
-- [ ] Run `cargo fmt --check`, `cargo test`, `tools\verify-security.ps1`, and full VM `tools\verify-release.ps1`.
+- [x] Update version and release notes.
+- [x] Run `cargo fmt --check`, `cargo test`, `tools\verify-security.ps1`, and full VM `tools\verify-release.ps1`.
 - [ ] Commit release prep.
 - [ ] Tag and push.
 - [ ] Verify GitHub release workflow, CI, and Security.
