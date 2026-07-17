@@ -45,9 +45,9 @@ function Test-CleanShutdown {
     return $Output.Contains("minitd: shutdown timeline: filesystems synced") -and $Output.Contains("reboot: Power down")
 }
 
-$append = "console=ttyS0 init=/init minit.rescue=1"
+$append = "console=ttyS0 quiet loglevel=3 init=/init minit.rescue=1"
 if ($NormalMode) {
-    $append = "console=ttyS0 init=/init minit.normal=1 minit.unit_dir=/etc/minit/services"
+    $append = "console=ttyS0 quiet loglevel=3 init=/init minit.normal=1 minit.unit_dir=/etc/minit/services"
 }
 if ($AutoShutdownSmoke) {
     $append = "$append minit.rescue.autoshutdown=1"
@@ -167,16 +167,28 @@ $args = @(
     "-no-reboot"
 )
 
-$job = Start-Job -ScriptBlock {
-    param($QemuPath, $QemuArgs)
-    & $QemuPath @QemuArgs
-    exit $LASTEXITCODE
-} -ArgumentList $qemu.Source, $args
+$stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "minit-qemu-$PID-$([System.Guid]::NewGuid()).out"
+$stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "minit-qemu-$PID-$([System.Guid]::NewGuid()).err"
+$quotedArgs = $args | ForEach-Object {
+    if ($_ -match '[\s"]') {
+        '"' + ($_ -replace '"', '\"') + '"'
+    } else {
+        $_
+    }
+}
+$process = Start-Process `
+    -FilePath $qemu.Source `
+    -ArgumentList $quotedArgs `
+    -RedirectStandardOutput $stdoutPath `
+    -RedirectStandardError $stderrPath `
+    -NoNewWindow `
+    -PassThru
 
 try {
-    if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
-        Stop-Job -Job $job
-        $output = Receive-Job -Job $job | Out-String
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-Process -Id $process.Id -Force
+        $process.WaitForExit()
+        $output = ((Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue))
         $output | Write-Output
         if ($NormalMode -and $output.Contains("minitd: normal mode ready")) {
             if ($ExpectStartUnit) {
@@ -348,7 +360,7 @@ try {
         exit 4
     }
 
-    $output = Receive-Job -Job $job | Out-String
+    $output = ((Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue) + (Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue))
     $output | Write-Output
     if ($ExpectStartUnit) {
         if ($output.Contains("accepted: started $ExpectStartUnit") -and $output.Contains("unit: $ExpectStartUnit") -and $output.Contains("state: active")) {
@@ -564,5 +576,9 @@ try {
     }
     exit 0
 } finally {
-    Remove-Job -Job $job -Force
+    if ($process -and -not $process.HasExited) {
+        Stop-Process -Id $process.Id -Force
+        $process.WaitForExit()
+    }
+    Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
 }

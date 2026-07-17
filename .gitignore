@@ -5,6 +5,7 @@
 /tests/vm/artifacts/
 /tools/vm/artifacts/
 /tools/release/artifacts/
+/tools/release/v1-readiness-evidence.json
 *.log
 *.img
 *.cpio

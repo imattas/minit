@@ -10,6 +10,8 @@ This repository is not daily-driver-ready yet.
 
 Release notes and known limitations for the latest release are in [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md).
 
+The v1.0.0 readiness gate is documented in [docs/v1-readiness.md](docs/v1-readiness.md). Source-only v1 checks are useful for development, but v1.0.0 must not be tagged until the full VM and distro-rootfs readiness gate has fresh evidence.
+
 ## Release verification
 
 Run the source-only gate:

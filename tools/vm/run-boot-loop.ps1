@@ -2,7 +2,8 @@ param(
     [string]$Kernel,
     [string]$Initramfs,
     [int]$Count = 2,
-    [int]$TimeoutSeconds = 30
+    [int]$TimeoutSeconds = 30,
+    [int]$InterBootDelayMilliseconds = 500
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +27,9 @@ for ($index = 1; $index -le $Count; $index++) {
         -TimeoutSeconds $TimeoutSeconds
     if ($LASTEXITCODE -ne 0) {
         throw "boot loop $index failed with exit code $LASTEXITCODE"
+    }
+    if ($InterBootDelayMilliseconds -gt 0 -and $index -lt $Count) {
+        Start-Sleep -Milliseconds $InterBootDelayMilliseconds
     }
 }
 

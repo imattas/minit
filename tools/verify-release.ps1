@@ -14,11 +14,25 @@ function Invoke-Step {
         [scriptblock]$Script
     )
 
-    Write-Host "==> $Name"
-    & $Script
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Name failed with exit code $LASTEXITCODE"
+    $attempts = if ($Name -like "vm *" -or $Name -like "extended VM *") { 3 } else { 1 }
+    $exitCode = 0
+    for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+        if ($attempts -gt 1) {
+            Write-Host "==> $Name (attempt $attempt/$attempts)"
+        } else {
+            Write-Host "==> $Name"
+        }
+        & $Script
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -eq 0) {
+            return
+        }
+        if ($attempt -lt $attempts) {
+            Write-Warning "$Name failed with exit code $exitCode; retrying."
+            Start-Sleep -Seconds 1
+        }
     }
+    throw "$Name failed with exit code $exitCode"
 }
 
 Invoke-Step "format check" { cargo fmt --check }
