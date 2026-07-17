@@ -169,6 +169,6 @@ Verification note: Alpine minirootfs gate was available and passed. Debian and A
 
 - [x] Update version and release notes.
 - [x] Run `cargo fmt --check`, `cargo test`, `tools\verify-security.ps1`, and full VM `tools\verify-release.ps1`.
-- [ ] Commit release prep.
-- [ ] Tag and push.
-- [ ] Verify GitHub release workflow, CI, and Security.
+- [x] Commit release prep.
+- [x] Tag and push.
+- [x] Verify GitHub release workflow, CI, and Security.
