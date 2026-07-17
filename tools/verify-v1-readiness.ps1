@@ -93,6 +93,18 @@ Invoke-Step "v1 release source and VM gate" {
     }
 }
 
+Invoke-Step "v1 package install and rollback gate" {
+    if ($SourceOnly) {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-install-rollback.ps1 -SkipBuild
+    } else {
+        powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-install-rollback.ps1 `
+            -SkipBuild `
+            -Kernel $Kernel `
+            -BusyBoxPath $BusyBoxPath `
+            -VmTimeoutSeconds $VmTimeoutSeconds
+    }
+}
+
 if ($SkipSecurity) {
     Write-Host "Skipping security gate by request."
 } else {

@@ -16,6 +16,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\verify-v1-readiness.ps
 The full gate runs:
 
 - source release verification: formatting, tests, Linux `musl` builds, release packaging, and checksums.
+- package install and rollback validation in a disposable root tree. In full mode, the installed layout is also used to build and boot an initramfs smoke.
 - normal-mode VM verification with the extended boot-loop stress gate.
 - security verification through `tools\verify-security.ps1`.
 - Alpine minirootfs distro-rootfs boot validation unless `-SkipAlpine` is explicitly supplied.
