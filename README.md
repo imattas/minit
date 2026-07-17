@@ -2,13 +2,13 @@
 
 `minit` is a Rust Linux init and service manager experiment targeting modern normal Linux distributions.
 
-Current milestone: VM-proven experimental release candidate with `minitd` as PID 1, cgroups v2 supervision, `minitctl` status/list/start/stop/restart/explain/graph/events/logs/boot-timeline, JSON dependency graph output, target boot, failed boot-target rescue fallback, mount/swap units, diagnostic events, hardening proof, seccomp deny-write proof, conservative unit conversion helpers, release packaging, and QEMU smoke coverage.
+Current milestone: VM-proven v0.4.0 release with `minitd` as PID 1, cgroups v2 supervision, `minitctl` status/list/start/stop/restart/explain/graph/events/logs/boot-timeline, JSON dependency graph output, target boot, failed boot-target rescue fallback, mount/swap units, diagnostic events, hardening proof, seccomp deny-write proof, conservative unit conversion helpers, release packaging, and QEMU smoke coverage.
 
 Normal mode will require Linux with cgroups v2. Rescue/initramfs mode is degraded and only intended to mount basic filesystems, start a shell or getty, reap children, and shut down cleanly.
 
 This repository is not daily-driver-ready yet.
 
-Release notes and known limitations for the latest experimental milestone are in [docs/releases/v0.4.0-experimental.md](docs/releases/v0.4.0-experimental.md).
+Release notes and known limitations for the latest release are in [docs/releases/v0.4.0.md](docs/releases/v0.4.0.md).
 
 ## Release verification
 
