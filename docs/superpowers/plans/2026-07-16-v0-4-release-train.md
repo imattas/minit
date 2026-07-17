@@ -147,12 +147,12 @@ Verification note: Alpine minirootfs gate was available and passed. Debian and A
 - Produces `minitctl convert --from systemd <path>`.
 - Produces explicit warnings for unsupported fields.
 
-- [ ] Add failing parse tests for simple systemd service conversion.
-- [ ] Add failing tests for unsupported systemd fields producing warnings.
-- [ ] Add OpenRC/runit/s6 skeleton detection with explicit unsupported warnings.
-- [ ] Keep generated TOML reviewable and conservative.
-- [ ] Document examples and limitations.
-- [ ] Run focused tests, then full release gate, then commit and push.
+- [x] Add failing parse tests for simple systemd service conversion.
+- [x] Add failing tests for unsupported systemd fields producing warnings.
+- [x] Add OpenRC/runit/s6 skeleton detection with explicit unsupported warnings.
+- [x] Keep generated TOML reviewable and conservative.
+- [x] Document examples and limitations.
+- [x] Run focused tests, then full release gate, then commit and push.
 
 ### Task 8: v0.4 Release
 

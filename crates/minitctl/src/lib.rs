@@ -4,6 +4,8 @@ use minit_core::ipc::{decode_response, encode_request};
 use minit_core::ipc::{ControlRequest, ControlResponse, UnitState, DEFAULT_CONTROL_SOCKET};
 use thiserror::Error;
 
+pub mod convert;
+
 #[derive(Debug, Clone, PartialEq, Eq, Parser)]
 #[command(name = "minitctl")]
 pub struct Cli {
@@ -46,6 +48,11 @@ pub enum Command {
     Restart {
         unit: String,
     },
+    Convert {
+        #[arg(long, value_enum)]
+        from: convert::SourceFormat,
+        path: std::path::PathBuf,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -73,6 +80,10 @@ where
 }
 
 pub fn run_cli(cli: Cli) -> i32 {
+    if let Command::Convert { from, path } = &cli.command {
+        return run_convert(*from, path);
+    }
+
     let socket = control_socket_for_cli(&cli).to_string();
 
     #[cfg(target_os = "linux")]
@@ -213,6 +224,38 @@ pub fn command_to_request(command: Command) -> ControlRequest {
         Command::Start { unit } => ControlRequest::Start { unit },
         Command::Stop { unit } => ControlRequest::Stop { unit },
         Command::Restart { unit } => ControlRequest::Restart { unit },
+        Command::Convert { .. } => {
+            unreachable!("convert is a local command and is handled before control transport")
+        }
+    }
+}
+
+pub fn run_convert(from: convert::SourceFormat, path: &std::path::Path) -> i32 {
+    let input = match std::fs::read_to_string(path) {
+        Ok(input) => input,
+        Err(error) => {
+            eprintln!("convert error: failed to read {}: {error}", path.display());
+            return 1;
+        }
+    };
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| path.to_string_lossy().to_string());
+
+    match convert::convert_unit(from, &name, &input) {
+        Ok(conversion) => {
+            for warning in conversion.warnings {
+                eprintln!("warning: {warning}");
+            }
+            print!("{}", conversion.toml);
+            0
+        }
+        Err(error) => {
+            eprintln!("convert error: {error}");
+            1
+        }
     }
 }
 
@@ -548,6 +591,44 @@ mod tests {
             Cli::parse_from(["minitctl", "restart", "sshd"]).command,
             Command::Restart {
                 unit: "sshd".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parses_convert_systemd_command() {
+        let cli = Cli::parse_from(["minitctl", "convert", "--from", "systemd", "sshd.service"]);
+
+        assert_eq!(
+            cli.command,
+            Command::Convert {
+                from: crate::convert::SourceFormat::Systemd,
+                path: std::path::PathBuf::from("sshd.service")
+            }
+        );
+    }
+
+    #[test]
+    fn parses_convert_unsupported_source_names() {
+        assert_eq!(
+            Cli::parse_from(["minitctl", "convert", "--from", "openrc", "sshd"]).command,
+            Command::Convert {
+                from: crate::convert::SourceFormat::OpenRc,
+                path: std::path::PathBuf::from("sshd")
+            }
+        );
+        assert_eq!(
+            Cli::parse_from(["minitctl", "convert", "--from", "runit", "run"]).command,
+            Command::Convert {
+                from: crate::convert::SourceFormat::Runit,
+                path: std::path::PathBuf::from("run")
+            }
+        );
+        assert_eq!(
+            Cli::parse_from(["minitctl", "convert", "--from", "s6", "run"]).command,
+            Command::Convert {
+                from: crate::convert::SourceFormat::S6,
+                path: std::path::PathBuf::from("run")
             }
         );
     }

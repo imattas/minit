@@ -1,55 +1,92 @@
-# Unit Conversion Notes
+# Unit Conversion
 
-This document maps simple systemd and OpenRC services into `minit` TOML units.
+`minitctl convert` produces reviewable `minit` TOML from a small subset of foreign init unit formats.
 
-## systemd Service
+The converter is intentionally conservative. Unsupported fields are reported as warnings instead of being silently approximated.
 
-Common source fields:
+## systemd Service Files
 
-- `Description=` maps to `[unit].description`.
-- `ExecStart=` maps to `[exec].start`.
-- `WorkingDirectory=` maps to `[exec].working_directory`.
-- `Restart=always` maps to `[restart].policy = "always"`.
-- `Restart=on-failure` maps to `[restart].policy = "on-failure"`.
-- `After=` maps to `[dependencies].after`.
-- `Requires=` maps to `[dependencies].requires`.
-- `Wants=` maps to `[dependencies].wants`.
+Convert a simple systemd service:
 
-Unsupported systemd features must be omitted or represented by explicit follow-up work. Do not silently approximate sandboxing, socket activation, timers, device units, user sessions, or journald behavior.
+```sh
+minitctl convert --from systemd ./sshd.service > sshd.service.toml
+```
 
-## OpenRC Service
+Supported systemd fields:
 
-Common source fields:
+- `[Unit] Description=` -> `[unit].description`
+- `[Unit] After=` -> `[dependencies].after`
+- `[Unit] Before=` -> `[dependencies].before`
+- `[Unit] Requires=` -> `[dependencies].requires`
+- `[Unit] Wants=` -> `[dependencies].wants`
+- `[Unit] Conflicts=` -> `[dependencies].conflicts`
+- `[Service] ExecStart=` -> `[exec].start`
+- `[Service] ExecReload=` -> `[exec].reload`
+- `[Service] ExecStop=` -> `[exec].stop`
+- `[Service] WorkingDirectory=` -> `[exec].working_directory`
+- `[Service] Restart=always` -> `[restart].policy = "always"`
+- `[Service] Restart=on-failure` -> `[restart].policy = "on-failure"`
+- `[Service] User=` -> `[security].user`
+- `[Service] Group=` -> `[security].group`
+- `[Service] NoNewPrivileges=yes` -> `[security].no_new_privileges = true`
+- `[Service] Environment=` -> `[security].environment`
 
-- `description` maps to `[unit].description`.
-- `command` plus `command_args` maps to `[exec].start`.
-- `directory` maps to `[exec].working_directory`.
-- `depend() { need ... }` maps to `[dependencies].requires`.
-- `depend() { want ... }` maps to `[dependencies].wants`.
-- `depend() { after ... }` maps to `[dependencies].after`.
+Example input:
 
-## Example
+```ini
+[Unit]
+Description=OpenSSH daemon
+After=network-online.target
+Requires=network.target
+
+[Service]
+ExecStart=/usr/bin/sshd -D
+Restart=on-failure
+User=root
+Group=root
+NoNewPrivileges=yes
+```
+
+Example output:
 
 ```toml
 [unit]
-name = "example.service"
-description = "Example daemon"
+name = "sshd.service"
+description = "OpenSSH daemon"
 kind = "service"
 
 [exec]
-start = ["/usr/bin/exampled", "--foreground"]
-working_directory = "/"
+start = ["/usr/bin/sshd", "-D"]
 
 [dependencies]
-after = ["networking.service"]
-requires = ["networking.service"]
+after = ["network-online.target"]
+requires = ["network.target"]
 
 [restart]
 policy = "on-failure"
-limit = "5/min"
-backoff = "exponential"
-max_delay = "30s"
 
 [security]
+user = "root"
+group = "root"
 no_new_privileges = true
 ```
+
+## Unsupported Sources
+
+These source formats are detected but not converted in this release:
+
+```sh
+minitctl convert --from openrc ./sshd
+minitctl convert --from runit ./run
+minitctl convert --from s6 ./run
+```
+
+For OpenRC, runit, and s6, the command emits explicit warnings and no TOML. This keeps the first converter release honest while reserving the CLI shape for later implementation.
+
+## Limitations
+
+- Only service units are converted.
+- `ExecStart=` parsing handles normal quoted command lines, not full shell syntax.
+- systemd socket activation, timers, device units, mount units, user sessions, journald behavior, notify readiness, complex sandboxing, and capability rules are not converted.
+- Unsupported fields appear as warnings on stderr.
+- Always review the generated TOML and run `minit_core::unit` validation or the release gate before booting converted units.
